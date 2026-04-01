@@ -1,3 +1,5 @@
 streamlit
 snowflake
 snowflake-connector-python
+pydeck
+json
