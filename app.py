@@ -149,7 +149,7 @@ geojson = geom_to_features(df_map, selected_dong)
 
 fill_color = DISTRICT_COLORS.get(selected_dong, [200, 200, 200, 160])
 
-st.markdown(f"### 서울 상권 분포 지도 — {selected_dong} · {selected_dong}")
+st.markdown(f"### 서울 상권 분포 지도 — {selected_gu} · {selected_dong}")
 
 geojson_layer = pdk.Layer(
     "GeoJsonLayer",
@@ -170,11 +170,11 @@ if not selected_row.empty:
 layers = [geojson_layer]
 
 DISTRICT_VIEW = {
-    "서초구":   {"latitude": 37.483, "longitude": 127.032, "zoom": 10, "dong_zoom": 4},
-    "영등포구": {"latitude": 37.526, "longitude": 126.896, "zoom": 12, "dong_zoom": 12},
+    "서초구":   {"latitude": 37.483, "longitude": 127.032, "zoom": 10, "dong_zoom": 12},
+    "영등포구": {"latitude": 37.526, "longitude": 126.896, "zoom": 12, "dong_zoom": 12.5},
     "중구":     {"latitude": 37.559, "longitude": 126.998, "zoom": 13, "dong_zoom": 13.5},
 }
-vw_config = DISTRICT_VIEW.get(selected_dong, {"latitude": 37.524, "longitude": 126.975, "zoom": 12, "dong_zoom": 14})
+vw_config = DISTRICT_VIEW.get(selected_gu, {"latitude": 37.524, "longitude": 126.975, "zoom": 12, "dong_zoom": 14})
 vw = {"latitude": vw_config["latitude"], "longitude": vw_config["longitude"], "zoom": vw_config["zoom"]}
 if pin_lat and pin_lon:
     vw["latitude"] = pin_lat
@@ -329,6 +329,73 @@ with tab2:
             tooltip=["TIME_SLOT", "TYPE", "POPULATION"]
         ).properties(title="시간대별 유동인구 분포")
         st.altair_chart(chart_time, use_container_width=True)
+
+        st.subheader("성별·연령대별 유동인구 분포")
+        demo_df = session.query(f"""
+            SELECT GENDER, AGE_GROUP,
+                   SUM(RESIDENTIAL_POPULATION) + SUM(WORKING_POPULATION) + SUM(VISITING_POPULATION) AS POPULATION
+            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+            WHERE DISTRICT_CODE = '{district_code}'
+              AND AGE_GROUP != '*'
+            GROUP BY GENDER, AGE_GROUP
+            ORDER BY AGE_GROUP, GENDER
+        """)
+        
+        demo_df["GENDER"] = demo_df["GENDER"].map({"M": "남성", "F": "여성"})
+        demo_df["AGE_GROUP"] = demo_df["AGE_GROUP"].astype(str)
+        chart_demo = alt.Chart(demo_df).mark_bar().encode(
+            x=alt.X("AGE_GROUP:N", title="연령대"),
+            y=alt.Y("POPULATION:Q", title="인구수"),
+            color=alt.Color("GENDER:N", title="성별"),
+            tooltip=[
+                alt.Tooltip("AGE_GROUP", title="연령대"),
+                alt.Tooltip("GENDER", title="성별"),
+                alt.Tooltip("POPULATION:Q", title="인구수", format=",")
+            ]
+        ).properties(title="성별·연령대별 유동인구")
+        st.altair_chart(chart_demo, use_container_width=True)
+
+        st.subheader("평일/주말 유동인구 비율")
+        wd_df = session.query(f"""
+            SELECT WEEKDAY_WEEKEND,
+                   SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
+                   SUM(WORKING_POPULATION) AS WORKING,
+                   SUM(VISITING_POPULATION) AS VISITING
+            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+            WHERE DISTRICT_CODE = '{district_code}'
+            GROUP BY WEEKDAY_WEEKEND
+        """)
+
+        wd_df["WEEKDAY_WEEKEND"] = wd_df["WEEKDAY_WEEKEND"].map({
+            "W": "평일", "H": "주말"
+        })
+        wd_long = wd_df.melt(
+            id_vars=["WEEKDAY_WEEKEND"],
+            value_vars=["RESIDENTIAL", "WORKING", "VISITING"],
+            var_name="TYPE", value_name="POPULATION"
+        )
+        wd_long["TYPE"] = wd_long["TYPE"].map({
+            "RESIDENTIAL": "거주", "WORKING": "직장", "VISITING": "방문"
+        })
+
+        c1, c2 = st.columns(2)
+        with c1:
+            chart_wd = alt.Chart(wd_long).mark_bar().encode(
+                x=alt.X("WEEKDAY_WEEKEND:N", title="구분"),
+                y=alt.Y("POPULATION:Q", title="인구수"),
+                color=alt.Color("TYPE:N", title="유형"),
+                tooltip=["WEEKDAY_WEEKEND", "TYPE", alt.Tooltip("POPULATION:Q", format=",")]
+            ).properties(title="평일/주말 유동인구")
+            st.altair_chart(chart_wd, use_container_width=True)
+        with c2:
+            total_by_day = wd_long.groupby("WEEKDAY_WEEKEND")["POPULATION"].sum().reset_index()
+            total_by_day["RATIO"] = total_by_day["POPULATION"] / total_by_day["POPULATION"].sum() * 100
+            chart_ratio = alt.Chart(total_by_day).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta("RATIO:Q"),
+                color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
+                tooltip=["WEEKDAY_WEEKEND", alt.Tooltip("RATIO:Q", title="비율(%)", format=".1f")]
+            ).properties(title="평일/주말 비율")
+            st.altair_chart(chart_ratio, use_container_width=True)
 
 with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 소득·자산 분석")
