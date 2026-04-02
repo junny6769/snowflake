@@ -427,17 +427,6 @@ with tab3:
         im3.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
         im4.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
 
-        inc_chart = alt.Chart(income_df).mark_line(point=True).encode(
-            x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
-            y=alt.Y("AVG_INCOME_MANWON:Q", title="평균소득(만원)"),
-            tooltip=[
-                alt.Tooltip("STANDARD_YEAR_MONTH:N", title="기준년월"),
-                alt.Tooltip("AVG_INCOME_MANWON:Q", title="평균소득(만원)", format=",.0f")
-            ]
-        ).properties(title="월별 평균소득 추이")
-        st.altair_chart(inc_chart, use_container_width=True)
-
-        st.subheader("소득 분포")
         dist_df = session.query(f"""
             SELECT
                 AVG(RATE_INCOME_UNDER_20M) AS "~2천만원",
@@ -451,16 +440,6 @@ with tab3:
             WHERE DISTRICT_CODE = '{district_code}'
         """)
 
-        dist_long = dist_df.T.reset_index()
-        dist_long.columns = ["소득구간", "비율(%)"]
-        chart_dist = alt.Chart(dist_long).mark_bar().encode(
-            x=alt.X("소득구간:N", sort=None, title="소득구간"),
-            y=alt.Y("비율(%):Q", title="비율(%)"),
-            tooltip=["소득구간", "비율(%)"]
-        ).properties(title="소득 구간별 인구 비율")
-        st.altair_chart(chart_dist, use_container_width=True)
-
-        st.subheader("직업군 분포")
         occ_df = session.query(f"""
             SELECT
                 AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS "대기업",
@@ -474,12 +453,24 @@ with tab3:
             WHERE DISTRICT_CODE = '{district_code}'
         """)
 
-        occ_long = occ_df.T.reset_index()
-        occ_long.columns = ["직업군", "비율(%)"]
-        chart_occ = alt.Chart(occ_long).mark_bar().encode(
-            x=alt.X("직업군:N", sort=None, title="직업군"),
-            y=alt.Y("비율(%):Q", title="비율(%)"),
-            color=alt.Color("직업군:N", legend=None),
-            tooltip=["직업군", "비율(%)"]
-        ).properties(title="직업군별 인구 비율")
-        st.altair_chart(chart_occ, use_container_width=True)
+        st.subheader("소득 / 직업군 분포")
+        c1, c2 = st.columns(2)
+        with c1:
+            dist_long = dist_df.T.reset_index()
+            dist_long.columns = ["소득구간", "비율(%)"]
+            chart_dist = alt.Chart(dist_long).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta("비율(%):Q"),
+                color=alt.Color("소득구간:N", sort=None, title="소득구간"),
+                tooltip=["소득구간", alt.Tooltip("비율(%):Q", format=".1f")]
+            ).properties(title="소득 구간별 인구 비율")
+            st.altair_chart(chart_dist, use_container_width=True)
+
+        with c2:
+            occ_long = occ_df.T.reset_index()
+            occ_long.columns = ["직업군", "비율(%)"]
+            chart_occ = alt.Chart(occ_long).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta("비율(%):Q"),
+                color=alt.Color("직업군:N", sort=None, title="직업군"),
+                tooltip=["직업군", alt.Tooltip("비율(%):Q", format=".1f")]
+            ).properties(title="직업군별 인구 비율")
+            st.altair_chart(chart_occ, use_container_width=True)
