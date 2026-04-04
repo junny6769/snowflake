@@ -206,8 +206,8 @@ with tab1:
     with c1:
         st.metric(
             label="총매출",
-            value=format_amount(dong_total_sales),
-            delta=f"{'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)} vs 구 평균"
+            value=f"{format_amount(dong_total_sales)}원",
+            delta=f"{'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)}원 vs 구 평균"
         )
     with c2:
         st.metric(
@@ -218,15 +218,15 @@ with tab1:
     with c3:
         st.metric(
             label="총 유동인구",
-            value=format_amount(dong_total_pop),
-            delta=f"{'+' if pop_diff >= 0 else ''}{format_amount(pop_diff)} vs 구 평균"
+            value=f"{format_amount(dong_total_pop)}명",
+            delta=f"{'+' if pop_diff >= 0 else ''}{format_amount(pop_diff)}명 vs 구 평균"
         )
     with c4:
         st.metric(
             label="평균소득",
-            value=format_amount(dong_avg_income),
-            delta=f"{'+' if income_diff >= 0 else ''}{format_amount(income_diff)} vs 구 평균"
-        )
+            value=f"{dong_avg_income:,.0f}만",
+            delta=f"{income_diff:+,.0f}만 vs 구 평균"
+        )   
 
     st.caption(f"기준: {latest_ym[:4]}년 {latest_ym[4:]}월 | 구 평균 = {selected_gu} 내 전체 동 평균")
 
@@ -300,14 +300,17 @@ with tab2:
         })
 
 
-        chart_sales = alt.Chart(card_df).mark_bar().encode(
+        chart_sales = alt.Chart(line_long).mark_line(point=True).encode(
             x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
-            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
+            y=alt.Y("VALUE:Q", title="매출액(원)"),
+            color=alt.Color("TYPE:N", title="구분"),
+            strokeDash=alt.StrokeDash("TYPE:N"),
             tooltip=[
                 alt.Tooltip("STANDARD_YEAR_MONTH", title="기준년월"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+                alt.Tooltip("TYPE", title="구분"),
+                alt.Tooltip("VALUE:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title=f"{selected_category} 월별 매출 추이")
+        ).properties(title=f"{selected_category} 월별 매출 추이 (vs 구 평균)")
         st.altair_chart(chart_sales, use_container_width=True)
     
         st.subheader("평일/주말 매출 비교")
