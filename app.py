@@ -233,12 +233,44 @@ with tab1:
 with tab2:
     st.subheader(f"{selected_gu} {selected_dong} — {selected_category} 카드 매출 분석")
 
+    col_start, col_end = st.columns(2)
+    all_ym = session.query(f"""
+        SELECT DISTINCT STANDARD_YEAR_MONTH
+        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        WHERE DISTRICT_CODE = '{district_code}'
+        ORDER BY STANDARD_YEAR_MONTH
+    """)["STANDARD_YEAR_MONTH"].tolist()
+
+    with col_start:
+        start_ym = st.selectbox("시작 기간", all_ym, index=0, key="start_ym")
+    with col_end:
+        end_ym = st.selectbox("종료 기간", all_ym, index=len(all_ym) - 1, key="end_ym")
+    
     card_df = session.query(f"""
         SELECT STANDARD_YEAR_MONTH,
                SUM({sales_col}) AS SALES,
                SUM(TOTAL_SALES) AS TOTAL_SALES
         FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
         WHERE DISTRICT_CODE = '{district_code}'
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+    gu_card_df = session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               AVG(d_sales) AS GU_AVG_SALES
+        FROM (
+            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
+                   SUM({sales_col}) AS d_sales
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE IN (
+                SELECT DISTINCT DISTRICT_CODE
+                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+                WHERE CITY_CODE = '{city_code}'
+            )
+            AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
+            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
+        )
         GROUP BY STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
@@ -251,19 +283,89 @@ with tab2:
         m2.metric("업종 비중", f"{card_df['SALES'].sum() / card_df['TOTAL_SALES'].sum() * 100:.2f}%")
 
         card_df["SALES_BILLION"] = card_df["SALES"] / 1_0000_0000
+        gu_card_df["GU_AVG_BILLION"] = gu_card_df["GU_AVG_SALES"] / 1_0000_0000
 
-        c1 = st.columns(2)
-        with c1:
-            chart_sales = alt.Chart(card_df).mark_bar().encode(
-                x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
-                y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
-                tooltip=[
-                    alt.Tooltip("STANDARD_YEAR_MONTH", title="기준년월"),
-                    alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
-                ]
-            ).properties(title=f"{selected_category} 월별 매출 추이")
-            st.altair_chart(chart_sales, use_container_width=True)
+        merged = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].merge(
+            gu_card_df[["STANDARD_YEAR_MONTH", "GU_AVG_BILLION"]],
+            on="STANDARD_YEAR_MONTH", how="left"
+        )
+        line_long = merged.melt(
+            id_vars=["STANDARD_YEAR_MONTH"],
+            value_vars=["SALES_BILLION", "GU_AVG_BILLION"],
+            var_name="TYPE", value_name="VALUE"
+        )
+        line_long["TYPE"] = line_long["TYPE"].map({
+            "SALES_BILLION": selected_dong,
+            "GU_AVG_BILLION": f"{selected_gu} 평균"
+        })
+
+
+        chart_sales = alt.Chart(card_df).mark_bar().encode(
+            x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
+            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
+            tooltip=[
+                alt.Tooltip("STANDARD_YEAR_MONTH", title="기준년월"),
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+            ]
+        ).properties(title=f"{selected_category} 월별 매출 추이")
+        st.altair_chart(chart_sales, use_container_width=True)
     
+        st.subheader("평일/주말 매출 비교")
+        wd_df = session.query(f"""
+            SELECT WEEKDAY_WEEKEND,
+                   SUM({sales_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{district_code}'
+              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
+            GROUP BY WEEKDAY_WEEKEND
+        """)
+        wd_df["WEEKDAY_WEEKEND"] = wd_df["WEEKDAY_WEEKEND"].map({"W": "평일", "H": "주말"})
+        wd_df["SALES_BILLION"] = wd_df["SALES"] / 1_0000_0000
+
+        chart_wd_sales = alt.Chart(wd_df).mark_bar().encode(
+            x=alt.X("WEEKDAY_WEEKEND:N", title=""),
+            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
+            color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
+            tooltip=[
+                alt.Tooltip("WEEKDAY_WEEKEND", title="구분"),
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+            ]
+        ).properties(title="평일/주말 매출")
+        st.altair_chart(chart_wd_sales, use_container_width=True)
+
+        LIFESTYLE_MAP = {
+            "L01": "가성비 소비형",
+            "L02": "생활 밀착형",
+            "L03": "프리미엄 소비형",
+            "L04": "자기관리형",
+            "L05": "가정 중심형",
+            "L06": "여가·문화형",
+        }
+
+        st.subheader("라이프스타일별 매출")
+        ls_df = session.query(f"""
+            SELECT LIFESTYLE,
+                   SUM({sales_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{district_code}'
+              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
+              AND LIFESTYLE IS NOT NULL
+              AND LIFESTYLE != '*'
+            GROUP BY LIFESTYLE
+            ORDER BY SALES DESC
+        """)
+        ls_df["LIFESTYLE"] = ls_df["LIFESTYLE"].map(LIFESTYLE_MAP).fillna(ls_df["LIFESTYLE"])
+        ls_df["SALES_BILLION"] = ls_df["SALES"] / 1_0000_0000
+
+        chart_ls = alt.Chart(ls_df).mark_bar().encode(
+            x=alt.X("SALES_BILLION:Q", title="매출액(억원)"),
+            y=alt.Y("LIFESTYLE:N", sort="-x", title="라이프스타일"),
+            tooltip=[
+                alt.Tooltip("LIFESTYLE", title="라이프스타일"),
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+            ]
+        ).properties(title="라이프스타일별 매출")
+        st.altair_chart(chart_ls, use_container_width=True)
 
         st.subheader("성별·연령대별 매출 분포")
         demo_df = session.query(f"""
