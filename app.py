@@ -325,16 +325,6 @@ with tab2:
         wd_df["WEEKDAY_WEEKEND"] = wd_df["WEEKDAY_WEEKEND"].map({"W": "평일", "H": "주말"})
         wd_df["SALES_BILLION"] = wd_df["SALES"] / 1_0000_0000
 
-        chart_wd_sales = alt.Chart(wd_df).mark_bar().encode(
-            x=alt.X("WEEKDAY_WEEKEND:N", title=""),
-            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
-            color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
-            tooltip=[
-                alt.Tooltip("WEEKDAY_WEEKEND", title="구분"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
-            ]
-        ).properties(title="평일/주말 매출")
-        st.altair_chart(chart_wd_sales, use_container_width=True)
 
         LIFESTYLE_MAP = {
             "L01": "가성비 소비형",
@@ -360,18 +350,34 @@ with tab2:
         ls_df["LIFESTYLE"] = ls_df["LIFESTYLE"].map(LIFESTYLE_MAP).fillna(ls_df["LIFESTYLE"])
         ls_df["SALES_BILLION"] = ls_df["SALES"] / 1_0000_0000
 
-        chart_ls = alt.Chart(ls_df).mark_bar().encode(
-            x=alt.X("SALES_BILLION:Q", title="매출액(억원)"),
-            y=alt.Y("LIFESTYLE:N", sort="-x", title="라이프스타일"),
+    c1, c2 = st.columns(2)
+
+    with c1: 
+        chart_wd_sales = alt.Chart(wd_df).mark_arc().encode(
+            theta=alt.Theta("SALES_BILLION:Q"),
+            color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
+            tooltip=[
+                alt.Tooltip("WEEKDAY_WEEKEND", title="구분"),
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
+            ]
+        ).properties(title="평일/주말 매출")
+        st.altair_chart(chart_wd_sales, use_container_width=True)
+
+    with c2:
+        chart_ls = alt.Chart(ls_df).mark_arc().encode(
+            theta=alt.Theta("SALES_BILLION:Q"),
+            color=alt.Color("LIFESTYLE:N", title="라이프스타일"),
             tooltip=[
                 alt.Tooltip("LIFESTYLE", title="라이프스타일"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
         ).properties(title="라이프스타일별 매출")
+
         st.altair_chart(chart_ls, use_container_width=True)
 
-        st.subheader("성별·연령대별 매출 분포")
-        demo_df = session.query(f"""
+
+    st.subheader("성별·연령대별 매출 분포")
+    demo_df = session.query(f"""
             SELECT GENDER, AGE_GROUP,
                    SUM({sales_col}) AS SALES
             FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
@@ -381,20 +387,20 @@ with tab2:
             ORDER BY AGE_GROUP, GENDER
         """)
 
-        demo_df["GENDER"] = demo_df["GENDER"].map({"M": "남성", "F": "여성"})
-        demo_df["AGE_GROUP"] = demo_df["AGE_GROUP"].astype(str)
-        demo_df["SALES_BILLION"] = demo_df["SALES"] / 1_0000_0000
-        chart_demo = alt.Chart(demo_df).mark_bar().encode(
+    demo_df["GENDER"] = demo_df["GENDER"].map({"M": "남성", "F": "여성"})
+    demo_df["AGE_GROUP"] = demo_df["AGE_GROUP"].astype(str)
+    demo_df["SALES_BILLION"] = demo_df["SALES"] / 1_0000_0000
+    chart_demo = alt.Chart(demo_df).mark_bar().encode(
             x=alt.X("AGE_GROUP:N", title="연령대"),
-            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
+            y=alt.Y("SALES_BILLION:Q", title="매출액(원)"),
             color=alt.Color("GENDER:N", title="성별"),
             tooltip=[
                 alt.Tooltip("AGE_GROUP", title="연령대"),
                 alt.Tooltip("GENDER", title="성별"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f")
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
         ).properties(title=f"{selected_category} 성별·연령대별 매출")
-        st.altair_chart(chart_demo, use_container_width=True)
+    st.altair_chart(chart_demo, use_container_width=True)
 
 with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 유동인구 분석")
