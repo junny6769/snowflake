@@ -97,15 +97,145 @@ sales_col, count_col = SALES_CATEGORIES[selected_category]
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["💳 카드 매출", "🚶 유동인구", "💰 소득·자산"])
+tab1, tab2, tab3, tab4 = st.tabs(["Overview","💳 카드 매출", "🚶 유동인구", "💰 소득·자산"])
 
 with tab1:
+    st.subheader(f"{selected_gu} {selected_dong} - {selected_category} Overview")
+
+    city_code = districts_df[
+        districts_df["CITY_KOR_NAME"] == selected_gu
+    ]["CITY_CODE"].iloc[0]
+
+    latest_ym = session.query(f"""
+        SELECT MAX(STANDARD_YEAR_MONTH) AS YM
+        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        WHERE DISTRICT_CODE = '{district_code}'
+    """)["YM"].iloc[0]
+
+    # 1) 해당 동 총매출 & 업종별 매출
+    dong_card = session.query(f"""
+        SELECT
+            SUM(TOTAL_SALES) AS TOTAL_SALES,
+            SUM({sales_col}) AS CATEGORY_SALES
+        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        WHERE DISTRICT_CODE = '{district_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
+    """)
+    dong_total_sales = dong_card["TOTAL_SALES"].iloc[0] or 0
+    dong_cat_sales = dong_card["CATEGORY_SALES"].iloc[0] or 0
+    cat_ratio = (dong_cat_sales / dong_total_sales * 100) if dong_total_sales else 0
+
+    # 2) 구 평균 총매출 & 업종비중
+    gu_avg = session.query(f"""
+        SELECT
+            AVG(d_total) AS AVG_TOTAL_SALES,
+            AVG(d_cat / NULLIF(d_total, 0)) * 100 AS AVG_CAT_RATIO
+        FROM (
+            SELECT
+                DISTRICT_CODE,
+                SUM(TOTAL_SALES) AS d_total,
+                SUM({sales_col}) AS d_cat
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE IN (
+                SELECT DISTINCT DISTRICT_CODE
+                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+                WHERE CITY_CODE = '{city_code}'
+            )
+            AND STANDARD_YEAR_MONTH = '{latest_ym}'
+            GROUP BY DISTRICT_CODE
+        )
+    """)
+    gu_avg_sales = gu_avg["AVG_TOTAL_SALES"].iloc[0] or 0
+    gu_avg_cat_ratio = gu_avg["AVG_CAT_RATIO"].iloc[0] or 0
+
+    # 3) 유동인구
+    dong_pop = session.query(f"""
+        SELECT SUM(RESIDENTIAL_POPULATION + WORKING_POPULATION + VISITING_POPULATION) AS TOTAL_POP
+        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+        WHERE DISTRICT_CODE = '{district_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
+    """)
+    dong_total_pop = dong_pop["TOTAL_POP"].iloc[0] or 0
+
+    gu_avg_pop = session.query(f"""
+        SELECT AVG(d_pop) AS AVG_POP
+        FROM (
+            SELECT DISTRICT_CODE,
+                   SUM(RESIDENTIAL_POPULATION + WORKING_POPULATION + VISITING_POPULATION) AS d_pop
+            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+            WHERE DISTRICT_CODE IN (
+                SELECT DISTINCT DISTRICT_CODE
+                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+                WHERE CITY_CODE = '{city_code}'
+            )
+            AND STANDARD_YEAR_MONTH = '{latest_ym}'
+            GROUP BY DISTRICT_CODE
+        )
+    """)
+    gu_avg_pop_val = gu_avg_pop["AVG_POP"].iloc[0] or 0
+
+    # 4) 평균소득
+    dong_income = session.query(f"""
+        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+        WHERE DISTRICT_CODE = '{district_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
+    """)
+    dong_avg_income = dong_income["AVG_INCOME"].iloc[0] or 0
+
+    gu_avg_income = session.query(f"""
+        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+        WHERE DISTRICT_CODE IN (
+            SELECT DISTINCT DISTRICT_CODE
+            FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+            WHERE CITY_CODE = '{city_code}'
+        )
+        AND STANDARD_YEAR_MONTH = '{latest_ym}'
+    """)
+    gu_avg_income_val = gu_avg_income["AVG_INCOME"].iloc[0] or 0
+
+    # 구 평균 대비 delta 계산
+    sales_diff = dong_total_sales - gu_avg_sales
+    ratio_diff = cat_ratio - gu_avg_cat_ratio
+    pop_diff = dong_total_pop - gu_avg_pop_val
+    income_diff = dong_avg_income - gu_avg_income_val
+
+    # 카드 표시
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric(
+            label="총매출",
+            value=format_amount(dong_total_sales),
+            delta=f"{'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)} vs 구 평균"
+        )
+    with c2:
+        st.metric(
+            label=f"{selected_category} 업종비중",
+            value=f"{cat_ratio:.1f}%",
+            delta=f"{ratio_diff:+.1f}%p vs 구 평균"
+        )
+    with c3:
+        st.metric(
+            label="총 유동인구",
+            value=format_amount(dong_total_pop),
+            delta=f"{'+' if pop_diff >= 0 else ''}{format_amount(pop_diff)} vs 구 평균"
+        )
+    with c4:
+        st.metric(
+            label="평균소득",
+            value=format_amount(dong_avg_income),
+            delta=f"{'+' if income_diff >= 0 else ''}{format_amount(income_diff)} vs 구 평균"
+        )
+
+    st.caption(f"기준: {latest_ym[:4]}년 {latest_ym[4:]}월 | 구 평균 = {selected_gu} 내 전체 동 평균")
+
+with tab2:
     st.subheader(f"{selected_gu} {selected_dong} — {selected_category} 카드 매출 분석")
 
     card_df = session.query(f"""
         SELECT STANDARD_YEAR_MONTH,
                SUM({sales_col}) AS SALES,
-               SUM({count_col}) AS TX_COUNT,
                SUM(TOTAL_SALES) AS TOTAL_SALES
         FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
         WHERE DISTRICT_CODE = '{district_code}'
@@ -116,14 +246,13 @@ with tab1:
     if card_df.empty:
         st.info("해당 조건에 맞는 카드 매출 데이터가 없습니다.")
     else:
-        m1, m2, m3 = st.columns(3)
+        m1, m2 = st.columns(2)
         m1.metric("총 매출", f"{format_amount(card_df['SALES'].sum())}원")
-        m2.metric("총 건수", f"{card_df['TX_COUNT'].sum():,.0f}")
-        m3.metric("업종 비중", f"{card_df['SALES'].sum() / card_df['TOTAL_SALES'].sum() * 100:.2f}%")
+        m2.metric("업종 비중", f"{card_df['SALES'].sum() / card_df['TOTAL_SALES'].sum() * 100:.2f}%")
 
         card_df["SALES_BILLION"] = card_df["SALES"] / 1_0000_0000
 
-        c1, c2 = st.columns(2)
+        c1 = st.columns(2)
         with c1:
             chart_sales = alt.Chart(card_df).mark_bar().encode(
                 x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
@@ -134,13 +263,7 @@ with tab1:
                 ]
             ).properties(title=f"{selected_category} 월별 매출 추이")
             st.altair_chart(chart_sales, use_container_width=True)
-        with c2:
-            chart_count = alt.Chart(card_df).mark_line(point=True).encode(
-                x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
-                y=alt.Y("TX_COUNT:Q", title="건수"),
-                tooltip=["STANDARD_YEAR_MONTH", "TX_COUNT"]
-            ).properties(title=f"{selected_category} 월별 이용건수 추이")
-            st.altair_chart(chart_count, use_container_width=True)
+    
 
         st.subheader("성별·연령대별 매출 분포")
         demo_df = session.query(f"""
@@ -168,7 +291,7 @@ with tab1:
         ).properties(title=f"{selected_category} 성별·연령대별 매출")
         st.altair_chart(chart_demo, use_container_width=True)
 
-with tab2:
+with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 유동인구 분석")
 
     pop_df = session.query(f"""
@@ -234,7 +357,7 @@ with tab2:
         ).properties(title="시간대별 유동인구 분포")
         st.altair_chart(chart_time, use_container_width=True)
 
-with tab3:
+with tab4:
     st.subheader(f"{selected_gu} {selected_dong} — 소득·자산 분석")
 
     income_df = session.query(f"""
