@@ -54,7 +54,7 @@ def load_districts():
         ORDER BY m.CITY_KOR_NAME, m.DISTRICT_KOR_NAME
     """)
 
-# 선택한 동에서 실제 데이터가 있는 업종만 보여줌
+# Load monthly category sales and total sales for the selected district
 @st.cache_data
 def load_card_df(d_code, s_col):
     return session.query(f"""
@@ -67,6 +67,7 @@ def load_card_df(d_code, s_col):
         ORDER BY STANDARD_YEAR_MONTH
     """)
 
+# Load monthly average category sales across all districts in the same gu (for benchmark comparison)
 @st.cache_data
 def load_gu_card_df(c_code, s_col):
     return session.query(f"""
@@ -87,6 +88,7 @@ def load_gu_card_df(c_code, s_col):
         ORDER BY STANDARD_YEAR_MONTH
     """)
 
+# 선택한 동에서 실제 데이터가 있는 업종만 보여줌
 @st.cache_data
 def load_available_categories(d_code):
     sales_cols = [v[0] for v in SALES_CATEGORIES.values()]
@@ -101,6 +103,40 @@ def load_available_categories(d_code):
         if df[sales_col].iloc[0] > 0:
             available.append(name)
     return available
+
+def geom_to_features(df, selected):
+    features = []
+    for _, row in df.iterrows():
+        try:
+            geom = json.loads(row["DISTRICT_GEOM"])
+        except (TypeError, ValueError):
+            continue
+        is_selected = row["DISTRICT_KOR_NAME"] == selected
+        features.append({
+            "type": "Feature",
+            "geometry": geom,
+            "properties": {
+                "district": str(row["DISTRICT_KOR_NAME"]) if row["DISTRICT_KOR_NAME"] else "",
+                "is_selected": is_selected,
+            },
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+def get_centroid(geojson_str):
+    try:
+        geom = json.loads(geojson_str)
+        coords = geom.get("coordinates", [])
+        if geom["type"] == "MultiPolygon":
+            pts = [p for poly in coords for ring in poly for p in ring]
+        elif geom["type"] == "Polygon":
+            pts = [p for ring in coords for p in ring]
+        else:
+            return None, None
+        lon = sum(p[0] for p in pts) / len(pts)
+        lat = sum(p[1] for p in pts) / len(pts)
+        return lat, lon
+    except Exception:
+        return None, None
 
 # 구 목록
 districts_df = load_districts()
@@ -140,40 +176,6 @@ df_map = session.query(
     f"FROM HACKATHON.DATA.M_SCCO_MST "
     f"WHERE CITY_KOR_NAME = '{selected_gu}'"
 )
-
-def geom_to_features(df, selected):
-    features = []
-    for _, row in df.iterrows():
-        try:
-            geom = json.loads(row["DISTRICT_GEOM"])
-        except (TypeError, ValueError):
-            continue
-        is_selected = row["DISTRICT_KOR_NAME"] == selected
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "district": str(row["DISTRICT_KOR_NAME"]) if row["DISTRICT_KOR_NAME"] else "",
-                "is_selected": is_selected,
-            },
-        })
-    return {"type": "FeatureCollection", "features": features}
-
-def get_centroid(geojson_str):
-    try:
-        geom = json.loads(geojson_str)
-        coords = geom.get("coordinates", [])
-        if geom["type"] == "MultiPolygon":
-            pts = [p for poly in coords for ring in poly for p in ring]
-        elif geom["type"] == "Polygon":
-            pts = [p for ring in coords for p in ring]
-        else:
-            return None, None
-        lon = sum(p[0] for p in pts) / len(pts)
-        lat = sum(p[1] for p in pts) / len(pts)
-        return lat, lon
-    except Exception:
-        return None, None
 
 geojson = geom_to_features(df_map, selected_dong)
 
@@ -300,17 +302,18 @@ with tab1:
     """)
     gu_avg_pop_val = gu_avg_pop["AVG_POP"].iloc[0] or 0
 
-    # 4) 평균소득
+    # 4) Average Median Income
     dong_income = session.query(f"""
-        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
         FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
         WHERE DISTRICT_CODE = '{district_code}'
           AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    dong_avg_income = dong_income["AVG_INCOME"].iloc[0] or 0
+    # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
+    dong_avg_median_income = (dong_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10 
 
     gu_avg_income = session.query(f"""
-        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
         FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
         WHERE DISTRICT_CODE IN (
             SELECT DISTINCT DISTRICT_CODE
@@ -319,13 +322,14 @@ with tab1:
         )
         AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    gu_avg_income_val = gu_avg_income["AVG_INCOME"].iloc[0] or 0
+    # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
+    gu_avg_median_income_val = (gu_avg_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10
 
     # 구 평균 대비 delta 계산
     sales_diff = dong_total_sales - gu_avg_sales
     ratio_diff = cat_ratio - gu_avg_cat_ratio
     pop_diff = dong_total_pop - gu_avg_pop_val
-    income_diff = dong_avg_income - gu_avg_income_val
+    income_diff = dong_avg_median_income - gu_avg_median_income_val
 
     # 카드 표시
     c1, c2, c3, c4 = st.columns(4)
@@ -349,8 +353,8 @@ with tab1:
         )
     with c4:
         st.metric(
-            label="평균소득",
-            value=f"{dong_avg_income:,.0f}만원",
+            label="평균 중위 소득",
+            value=f"{dong_avg_median_income:,.0f}만원",
             delta=f"{income_diff:+,.0f}만원 vs 구 평균"
         )
 
