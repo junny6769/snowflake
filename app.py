@@ -1,6 +1,8 @@
 # imports 
+import json
 import streamlit as st
 import altair as alt
+import pydeck as pdk
 
 #snowflake session 
 session = st.connection("snowflake")
@@ -56,6 +58,38 @@ def load_districts():
 
 # 선택한 동에서 실제 데이터가 있는 업종만 보여줌 
 @st.cache_data
+def load_card_df(d_code, s_col):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               SUM({s_col}) AS SALES,
+               SUM(TOTAL_SALES) AS TOTAL_SALES
+        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+@st.cache_data
+def load_gu_card_df(c_code, s_col):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               AVG(d_sales) AS GU_AVG_SALES
+        FROM (
+            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
+                   SUM({s_col}) AS d_sales
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE IN (
+                SELECT DISTINCT DISTRICT_CODE
+                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+                WHERE CITY_CODE = '{c_code}'
+            )
+            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
+        )
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+@st.cache_data
 def load_available_categories(d_code):
     sales_cols = [v[0] for v in SALES_CATEGORIES.values()]
     sum_exprs = ", ".join([f"SUM({c}) AS {c}" for c in sales_cols])
@@ -94,6 +128,100 @@ with col_c:
     selected_category = st.selectbox("업종 선택", available_categories)
 
 sales_col, count_col = SALES_CATEGORIES[selected_category]
+
+# ── 상수 ─────────────────────────────────────────────────────────────────────
+DISTRICT_COLORS = {
+    "서초구":   [76,  139, 245, 160],
+    "영등포구": [245, 166,  35, 160],
+    "중구":     [80,  200, 120, 160],
+}
+
+# ── 지도 ─────────────────────────────────────────────────────────────────────
+df_map = session.query(
+    f"SELECT CITY_KOR_NAME, DISTRICT_KOR_NAME, DISTRICT_GEOM "
+    f"FROM HACKATHON.DATA.M_SCCO_MST "
+    f"WHERE CITY_KOR_NAME = '{selected_gu}'"
+)
+
+def geom_to_features(df, selected):
+    features = []
+    for _, row in df.iterrows():
+        try:
+            geom = json.loads(row["DISTRICT_GEOM"])
+        except (TypeError, ValueError):
+            continue
+        is_selected = row["DISTRICT_KOR_NAME"] == selected
+        features.append({
+            "type": "Feature",
+            "geometry": geom,
+            "properties": {
+                "district": str(row["DISTRICT_KOR_NAME"]) if row["DISTRICT_KOR_NAME"] else "",
+                "is_selected": is_selected,
+            },
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+def get_centroid(geojson_str):
+    try:
+        geom = json.loads(geojson_str)
+        coords = geom.get("coordinates", [])
+        if geom["type"] == "MultiPolygon":
+            pts = [p for poly in coords for ring in poly for p in ring]
+        elif geom["type"] == "Polygon":
+            pts = [p for ring in coords for p in ring]
+        else:
+            return None, None
+        lon = sum(p[0] for p in pts) / len(pts)
+        lat = sum(p[1] for p in pts) / len(pts)
+        return lat, lon
+    except Exception:
+        return None, None
+
+geojson = geom_to_features(df_map, selected_dong)
+
+fill_color = DISTRICT_COLORS.get(selected_dong, [200, 200, 200, 160])
+
+st.markdown(f"### 서울 상권 분포 지도 — {selected_gu} · {selected_dong}")
+
+geojson_layer = pdk.Layer(
+    "GeoJsonLayer",
+    data=geojson,
+    get_fill_color=f"[{fill_color[0]}, {fill_color[1]}, {fill_color[2]}, properties.is_selected ? 180 : 60]",
+    get_line_color="properties.is_selected ? [255, 60, 60, 255] : [150, 150, 150, 120]",
+    get_line_width="properties.is_selected ? 40 : 10",
+    line_width_min_pixels=1,
+    pickable=True,
+    auto_highlight=True,
+)
+
+selected_row = df_map[df_map["DISTRICT_KOR_NAME"] == selected_dong]
+pin_lat, pin_lon = None, None
+if not selected_row.empty:
+    pin_lat, pin_lon = get_centroid(selected_row.iloc[0]["DISTRICT_GEOM"])
+
+layers = [geojson_layer]
+
+DISTRICT_VIEW = {
+    "서초구":   {"latitude": 37.483, "longitude": 127.032, "zoom": 10, "dong_zoom": 12},
+    "영등포구": {"latitude": 37.526, "longitude": 126.896, "zoom": 12, "dong_zoom": 12.5},
+    "중구":     {"latitude": 37.559, "longitude": 126.998, "zoom": 13, "dong_zoom": 13.5},
+}
+vw_config = DISTRICT_VIEW.get(selected_gu, {"latitude": 37.524, "longitude": 126.975, "zoom": 12, "dong_zoom": 14})
+vw = {"latitude": vw_config["latitude"], "longitude": vw_config["longitude"], "zoom": vw_config["zoom"]}
+if pin_lat and pin_lon:
+    vw["latitude"] = pin_lat
+    vw["longitude"] = pin_lon
+    vw["zoom"] = vw_config["dong_zoom"]
+
+view = pdk.ViewState(**vw, pitch=0)
+st.pydeck_chart(
+    pdk.Deck(
+        layers=layers,
+        initial_view_state=view,
+        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        tooltip={"html": "<b>{district}</b>", "style": {"backgroundColor": "white", "color": "black"}},
+    )
+)
 
 st.divider()
 
@@ -246,34 +374,17 @@ with tab2:
     with col_end:
         end_ym = st.selectbox("종료 기간", all_ym, index=len(all_ym) - 1, key="end_ym")
     
-    card_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM({sales_col}) AS SALES,
-               SUM(TOTAL_SALES) AS TOTAL_SALES
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    card_df_full = load_card_df(district_code, sales_col)
+    gu_card_df_full = load_gu_card_df(city_code, sales_col)
 
-    gu_card_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               AVG(d_sales) AS GU_AVG_SALES
-        FROM (
-            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
-                   SUM({sales_col}) AS d_sales
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE IN (
-                SELECT DISTINCT DISTRICT_CODE
-                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-                WHERE CITY_CODE = '{city_code}'
-            )
-            AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
-        )
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    card_df = card_df_full[
+        (card_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+        (card_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+    ].copy()
+    gu_card_df = gu_card_df_full[
+        (gu_card_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+        (gu_card_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+    ].copy()
 
     if card_df.empty:
         st.info("해당 조건에 맞는 카드 매출 데이터가 없습니다.")
@@ -498,17 +609,6 @@ with tab4:
         im3.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
         im4.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
 
-        inc_chart = alt.Chart(income_df).mark_line(point=True).encode(
-            x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
-            y=alt.Y("AVG_INCOME_MANWON:Q", title="평균소득(만원)"),
-            tooltip=[
-                alt.Tooltip("STANDARD_YEAR_MONTH:N", title="기준년월"),
-                alt.Tooltip("AVG_INCOME_MANWON:Q", title="평균소득(만원)", format=",.0f")
-            ]
-        ).properties(title="월별 평균소득 추이")
-        st.altair_chart(inc_chart, use_container_width=True)
-
-        st.subheader("소득 분포")
         dist_df = session.query(f"""
             SELECT
                 AVG(RATE_INCOME_UNDER_20M) AS "~2천만원",
@@ -522,16 +622,6 @@ with tab4:
             WHERE DISTRICT_CODE = '{district_code}'
         """)
 
-        dist_long = dist_df.T.reset_index()
-        dist_long.columns = ["소득구간", "비율(%)"]
-        chart_dist = alt.Chart(dist_long).mark_bar().encode(
-            x=alt.X("소득구간:N", sort=None, title="소득구간"),
-            y=alt.Y("비율(%):Q", title="비율(%)"),
-            tooltip=["소득구간", "비율(%)"]
-        ).properties(title="소득 구간별 인구 비율")
-        st.altair_chart(chart_dist, use_container_width=True)
-
-        st.subheader("직업군 분포")
         occ_df = session.query(f"""
             SELECT
                 AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS "대기업",
@@ -545,12 +635,24 @@ with tab4:
             WHERE DISTRICT_CODE = '{district_code}'
         """)
 
-        occ_long = occ_df.T.reset_index()
-        occ_long.columns = ["직업군", "비율(%)"]
-        chart_occ = alt.Chart(occ_long).mark_bar().encode(
-            x=alt.X("직업군:N", sort=None, title="직업군"),
-            y=alt.Y("비율(%):Q", title="비율(%)"),
-            color=alt.Color("직업군:N", legend=None),
-            tooltip=["직업군", "비율(%)"]
-        ).properties(title="직업군별 인구 비율")
-        st.altair_chart(chart_occ, use_container_width=True)
+        st.subheader("소득 / 직업군 분포")
+        c1, c2 = st.columns(2)
+        with c1:
+            dist_long = dist_df.T.reset_index()
+            dist_long.columns = ["소득구간", "비율(%)"]
+            chart_dist = alt.Chart(dist_long).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta("비율(%):Q"),
+                color=alt.Color("소득구간:N", sort=None, title="소득구간"),
+                tooltip=["소득구간", alt.Tooltip("비율(%):Q", format=".1f")]
+            ).properties(title="소득 구간별 인구 비율")
+            st.altair_chart(chart_dist, use_container_width=True)
+
+        with c2:
+            occ_long = occ_df.T.reset_index()
+            occ_long.columns = ["직업군", "비율(%)"]
+            chart_occ = alt.Chart(occ_long).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta("비율(%):Q"),
+                color=alt.Color("직업군:N", sort=None, title="직업군"),
+                tooltip=["직업군", alt.Tooltip("비율(%):Q", format=".1f")]
+            ).properties(title="직업군별 인구 비율")
+            st.altair_chart(chart_occ, use_container_width=True)
