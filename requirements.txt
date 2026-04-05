@@ -3,3 +3,4 @@ snowflake
 snowflake-connector-python
 pydeck
 json
+snowflake-connector-python
