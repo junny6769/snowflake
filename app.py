@@ -224,9 +224,9 @@ with tab1:
     with c4:
         st.metric(
             label="평균소득",
-            value=f"{dong_avg_income:,.0f}만",
-            delta=f"{income_diff:+,.0f}만 vs 구 평균"
-        )   
+            value=f"{dong_avg_income:,.0f}만원",
+            delta=f"{income_diff:+,.0f}만원 vs 구 평균"
+        )  
 
     st.caption(f"기준: {latest_ym[:4]}년 {latest_ym[4:]}월 | 구 평균 = {selected_gu} 내 전체 동 평균")
 
