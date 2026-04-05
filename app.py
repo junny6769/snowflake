@@ -58,6 +58,38 @@ def load_districts():
 
 # 선택한 동에서 실제 데이터가 있는 업종만 보여줌 
 @st.cache_data
+def load_card_df(d_code, s_col):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               SUM({s_col}) AS SALES,
+               SUM(TOTAL_SALES) AS TOTAL_SALES
+        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+@st.cache_data
+def load_gu_card_df(c_code, s_col):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               AVG(d_sales) AS GU_AVG_SALES
+        FROM (
+            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
+                   SUM({s_col}) AS d_sales
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE IN (
+                SELECT DISTINCT DISTRICT_CODE
+                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
+                WHERE CITY_CODE = '{c_code}'
+            )
+            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
+        )
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+@st.cache_data
 def load_available_categories(d_code):
     sales_cols = [v[0] for v in SALES_CATEGORIES.values()]
     sum_exprs = ", ".join([f"SUM({c}) AS {c}" for c in sales_cols])
@@ -342,34 +374,17 @@ with tab2:
     with col_end:
         end_ym = st.selectbox("종료 기간", all_ym, index=len(all_ym) - 1, key="end_ym")
     
-    card_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM({sales_col}) AS SALES,
-               SUM(TOTAL_SALES) AS TOTAL_SALES
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    card_df_full = load_card_df(district_code, sales_col)
+    gu_card_df_full = load_gu_card_df(city_code, sales_col)
 
-    gu_card_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               AVG(d_sales) AS GU_AVG_SALES
-        FROM (
-            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
-                   SUM({sales_col}) AS d_sales
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE IN (
-                SELECT DISTINCT DISTRICT_CODE
-                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-                WHERE CITY_CODE = '{city_code}'
-            )
-            AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
-        )
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    card_df = card_df_full[
+        (card_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+        (card_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+    ].copy()
+    gu_card_df = gu_card_df_full[
+        (gu_card_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+        (gu_card_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+    ].copy()
 
     if card_df.empty:
         st.info("해당 조건에 맞는 카드 매출 데이터가 없습니다.")
