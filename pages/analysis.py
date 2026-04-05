@@ -87,6 +87,40 @@ def load_gu_card_df(c_code, s_col):
         GROUP BY STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
+    
+@st.cache_data
+def load_weekday_weekend_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT STANDARD_YEAR_MONTH, WEEKDAY_WEEKEND,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+            GROUP BY STANDARD_YEAR_MONTH, WEEKDAY_WEEKEND
+        """)
+
+@st.cache_data
+def load_lifestyle_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT STANDARD_YEAR_MONTH, LIFESTYLE,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+              AND LIFESTYLE IS NOT NULL
+              AND LIFESTYLE != '*'
+            GROUP BY LIFESTYLE, STANDARD_YEAR_MONTH
+            ORDER BY SALES DESC
+        """)
+@st.cache_data
+def load_demography_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT GENDER, AGE_GROUP, STANDARD_YEAR_MONTH,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+              AND AGE_GROUP != '*'
+            GROUP BY GENDER, AGE_GROUP, STANDARD_YEAR_MONTH
+            ORDER BY AGE_GROUP, GENDER
+        """)
 
 # 선택한 동에서 실제 데이터가 있는 업종만 보여줌
 @st.cache_data
@@ -374,7 +408,13 @@ with tab2:
     with col_start:
         start_ym = st.selectbox("시작 기간", all_ym, index=0, key="start_ym")
     with col_end:
-        end_ym = st.selectbox("종료 기간", all_ym, index=len(all_ym) - 1, key="end_ym")
+        # end options are limited to months >= start
+        end_options = [ym for ym in all_ym if ym >= start_ym]
+        end_ym = st.selectbox("종료 기간", end_options, index=len(end_options) - 1, key="end_ym")
+
+    if start_ym > end_ym:
+        st.error("시작 기간은 종료 기간보다 늦을 수 없습니다.")
+        st.stop()
 
     card_df_full = load_card_df(district_code, sales_col)
     gu_card_df_full = load_gu_card_df(city_code, sales_col)
@@ -426,15 +466,13 @@ with tab2:
         ).properties(title=f"{selected_category} 월별 매출 추이 (vs 구 평균)")
         st.altair_chart(chart_sales, use_container_width=True)
 
-        st.subheader("평일/주말 매출 비교")
-        wd_df = session.query(f"""
-            SELECT WEEKDAY_WEEKEND,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-            GROUP BY WEEKDAY_WEEKEND
-        """)
+
+        wd_df_full = load_weekday_weekend_card_df(district_code, sales_col)
+        wd_df = wd_df_full[
+            (wd_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (wd_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+        wd_df = wd_df.groupby("WEEKDAY_WEEKEND", as_index=False)["SALES"].sum()
         wd_df["WEEKDAY_WEEKEND"] = wd_df["WEEKDAY_WEEKEND"].map({"W": "평일", "H": "주말"})
         wd_df["SALES_BILLION"] = wd_df["SALES"] / 1_0000_0000
 
@@ -448,24 +486,19 @@ with tab2:
             "L06": "여가·문화형",
         }
 
-        st.subheader("라이프스타일별 매출")
-        ls_df = session.query(f"""
-            SELECT LIFESTYLE,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-              AND LIFESTYLE IS NOT NULL
-              AND LIFESTYLE != '*'
-            GROUP BY LIFESTYLE
-            ORDER BY SALES DESC
-        """)
+        ls_df_full = load_lifestyle_card_df(district_code, sales_col)
+        ls_df = ls_df_full[
+            (ls_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (ls_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+        ls_df = ls_df.groupby("LIFESTYLE", as_index=False)["SALES"].sum()
         ls_df["LIFESTYLE"] = ls_df["LIFESTYLE"].map(LIFESTYLE_MAP).fillna(ls_df["LIFESTYLE"])
         ls_df["SALES_BILLION"] = ls_df["SALES"] / 1_0000_0000
 
     c1, c2 = st.columns(2)
 
     with c1:
+        st.subheader("평일/주말 매출 비교")
         chart_wd_sales = alt.Chart(wd_df).mark_arc().encode(
             theta=alt.Theta("SALES_BILLION:Q"),
             color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
@@ -473,10 +506,11 @@ with tab2:
                 alt.Tooltip("WEEKDAY_WEEKEND", title="구분"),
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title="평일/주말 매출")
+        )
         st.altair_chart(chart_wd_sales, use_container_width=True)
 
     with c2:
+        st.subheader("라이프스타일별 매출")
         chart_ls = alt.Chart(ls_df).mark_arc().encode(
             theta=alt.Theta("SALES_BILLION:Q"),
             color=alt.Color("LIFESTYLE:N", title="라이프스타일"),
@@ -484,33 +518,36 @@ with tab2:
                 alt.Tooltip("LIFESTYLE", title="라이프스타일"),
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title="라이프스타일별 매출")
-
+        )
         st.altair_chart(chart_ls, use_container_width=True)
 
 
     st.subheader("성별·연령대별 매출 분포")
-    demo_df = session.query(f"""
-            SELECT GENDER, AGE_GROUP,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND AGE_GROUP != '*'
-            GROUP BY GENDER, AGE_GROUP
-            ORDER BY AGE_GROUP, GENDER
-        """)
+    demo_df_full = load_demography_card_df(district_code, sales_col)
+    demo_df = demo_df_full[
+            (demo_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (demo_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+
+    # combine monthly data by summing across the selected period
+    demo_df = demo_df.groupby(["GENDER", "AGE_GROUP"], as_index=False)["SALES"].sum()
 
     demo_df["GENDER"] = demo_df["GENDER"].map({"M": "남성", "F": "여성"})
     demo_df["AGE_GROUP"] = demo_df["AGE_GROUP"].astype(str)
     demo_df["SALES_BILLION"] = demo_df["SALES"] / 1_0000_0000
+
+    total_df = demo_df.groupby("AGE_GROUP", as_index=False)["SALES_BILLION"].sum().rename(columns={"SALES_BILLION": "TOTAL_BILLION"})
+    demo_df = demo_df.merge(total_df, on="AGE_GROUP")
+
     chart_demo = alt.Chart(demo_df).mark_bar().encode(
             x=alt.X("AGE_GROUP:N", title="연령대"),
-            y=alt.Y("SALES_BILLION:Q", title="매출액(원)"),
+            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
             color=alt.Color("GENDER:N", title="성별"),
             tooltip=[
                 alt.Tooltip("AGE_GROUP", title="연령대"),
                 alt.Tooltip("GENDER", title="성별"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f"),
+                alt.Tooltip("TOTAL_BILLION:Q", title="합계(억원)", format=",.1f"),
             ]
         ).properties(title=f"{selected_category} 성별·연령대별 매출")
     st.altair_chart(chart_demo, use_container_width=True)
