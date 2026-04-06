@@ -122,6 +122,49 @@ def load_demography_card_df(d_code, s_col):
             ORDER BY AGE_GROUP, GENDER
         """)
 
+@st.cache_data
+def load_population_df(d_code):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH, TIME_SLOT,
+               SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
+               SUM(WORKING_POPULATION) AS WORKING,
+               SUM(VISITING_POPULATION) AS VISITING
+        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH, TIME_SLOT
+        ORDER BY STANDARD_YEAR_MONTH, TIME_SLOT
+    """)
+
+@st.cache_data
+def load_income_df(d_code):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               SUM(CUSTOMER_COUNT) AS CUSTOMERS,
+               AVG(AVERAGE_INCOME) AS AVG_INCOME,
+               AVG(MEDIAN_INCOME) AS MEDIAN_INCOME,
+               AVG(AVERAGE_HOUSEHOLD_INCOME) AS AVG_HH_INCOME,
+               AVG(AVERAGE_ASSET_AMOUNT) AS AVG_ASSET,
+               AVG(AVERAGE_SCORE) AS AVG_CREDIT_SCORE,
+               AVG(RATE_INCOME_UNDER_20M) AS RATE_UNDER_20M,
+               AVG(RATE_INCOME_20M_TO_30M) AS RATE_20M_30M,
+               AVG(RATE_INCOME_30M_TO_40M) AS RATE_30M_40M,
+               AVG(RATE_INCOME_40M_TO_50M) AS RATE_40M_50M,
+               AVG(RATE_INCOME_50M_TO_60M) AS RATE_50M_60M,
+               AVG(RATE_INCOME_60M_TO_70M) AS RATE_60M_70M,
+               AVG(RATE_INCOME_OVER_70M) AS RATE_OVER_70M,
+               AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS RATE_LARGE_CO,
+               AVG(RATE_MODEL_GROUP_GENERAL_EMPLOYEE) AS RATE_GENERAL_EMP,
+               AVG(RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE) AS RATE_PROFESSIONAL,
+               AVG(RATE_MODEL_GROUP_EXECUTIVES) AS RATE_EXEC,
+               AVG(RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED) AS RATE_SELF_EMP,
+               AVG(RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED) AS RATE_PRO_SELF_EMP,
+               AVG(RATE_MODEL_GROUP_OTHERS) AS RATE_OTHERS
+        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
 # 선택한 동에서 실제 데이터가 있는 업종만 보여줌
 @st.cache_data
 def load_available_categories(d_code):
@@ -600,16 +643,23 @@ with tab2:
 with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 유동인구 분석")
 
-    pop_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
-               SUM(WORKING_POPULATION) AS WORKING,
-               SUM(VISITING_POPULATION) AS VISITING
-        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    pop_df_full = load_population_df(district_code)
+    all_ym_pop = sorted(pop_df_full["STANDARD_YEAR_MONTH"].unique().tolist())
+
+    col_start3, col_end3 = st.columns(2)
+    with col_start3:
+        start_ym3 = st.selectbox("시작 기간", all_ym_pop, index=0, key="start_ym3")
+    with col_end3:
+        end_options3 = [ym for ym in all_ym_pop if ym >= start_ym3]
+        end_ym3 = st.selectbox("종료 기간", end_options3, index=len(end_options3) - 1, key="end_ym3")
+
+    pop_filtered = pop_df_full[
+        (pop_df_full["STANDARD_YEAR_MONTH"] >= start_ym3) &
+        (pop_df_full["STANDARD_YEAR_MONTH"] <= end_ym3)
+    ]
+    pop_df = pop_filtered.groupby("STANDARD_YEAR_MONTH", as_index=False)[
+        ["RESIDENTIAL", "WORKING", "VISITING"]
+    ].sum()
 
     if pop_df.empty:
         st.info("해당 조건에 맞는 유동인구 데이터가 없습니다.")
@@ -636,16 +686,9 @@ with tab3:
         st.altair_chart(chart_pop, width="stretch")
 
         st.subheader("시간대별 유동인구")
-        time_df = session.query(f"""
-            SELECT TIME_SLOT,
-                   SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
-                   SUM(WORKING_POPULATION) AS WORKING,
-                   SUM(VISITING_POPULATION) AS VISITING
-            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-            GROUP BY TIME_SLOT
-            ORDER BY TIME_SLOT
-             """)
+        time_df = pop_filtered.groupby("TIME_SLOT", as_index=False)[
+            ["RESIDENTIAL", "WORKING", "VISITING"]
+        ].sum().sort_values("TIME_SLOT")
 
         time_long = time_df.melt(
             id_vars=["TIME_SLOT"],
@@ -666,19 +709,20 @@ with tab3:
 with tab4:
     st.subheader(f"{selected_gu} {selected_dong} — 소득·자산 분석")
 
-    income_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM(CUSTOMER_COUNT) AS CUSTOMERS,
-               AVG(AVERAGE_INCOME) AS AVG_INCOME,
-               AVG(MEDIAN_INCOME) AS MEDIAN_INCOME,
-               AVG(AVERAGE_HOUSEHOLD_INCOME) AS AVG_HH_INCOME,
-               AVG(AVERAGE_ASSET_AMOUNT) AS AVG_ASSET,
-               AVG(AVERAGE_SCORE) AS AVG_CREDIT_SCORE
-        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    income_df_full = load_income_df(district_code)
+    all_ym_income = sorted(income_df_full["STANDARD_YEAR_MONTH"].unique().tolist())
+
+    col_start4, col_end4 = st.columns(2)
+    with col_start4:
+        start_ym4 = st.selectbox("시작 기간", all_ym_income, index=0, key="start_ym4")
+    with col_end4:
+        end_options4 = [ym for ym in all_ym_income if ym >= start_ym4]
+        end_ym4 = st.selectbox("종료 기간", end_options4, index=len(end_options4) - 1, key="end_ym4")
+
+    income_df = income_df_full[
+        (income_df_full["STANDARD_YEAR_MONTH"] >= start_ym4) &
+        (income_df_full["STANDARD_YEAR_MONTH"] <= end_ym4)
+    ].copy()
 
     if income_df.empty:
         st.info("해당 조건에 맞는 소득·자산 데이터가 없습니다.")
@@ -693,31 +737,25 @@ with tab4:
         im3.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
         im4.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
 
-        dist_df = session.query(f"""
-            SELECT
-                AVG(RATE_INCOME_UNDER_20M) AS "~2천만원",
-                AVG(RATE_INCOME_20M_TO_30M) AS "2~3천만원",
-                AVG(RATE_INCOME_30M_TO_40M) AS "3~4천만원",
-                AVG(RATE_INCOME_40M_TO_50M) AS "4~5천만원",
-                AVG(RATE_INCOME_50M_TO_60M) AS "5~6천만원",
-                AVG(RATE_INCOME_60M_TO_70M) AS "6~7천만원",
-                AVG(RATE_INCOME_OVER_70M) AS "7천만원~"
-            FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-        """)
+        dist_df = income_df[[
+            "RATE_UNDER_20M", "RATE_20M_30M", "RATE_30M_40M", "RATE_40M_50M",
+            "RATE_50M_60M", "RATE_60M_70M", "RATE_OVER_70M"
+        ]].mean().rename({
+            "RATE_UNDER_20M": "~2천만원", "RATE_20M_30M": "2~3천만원",
+            "RATE_30M_40M": "3~4천만원", "RATE_40M_50M": "4~5천만원",
+            "RATE_50M_60M": "5~6천만원", "RATE_60M_70M": "6~7천만원",
+            "RATE_OVER_70M": "7천만원~"
+        }).to_frame().T
 
-        occ_df = session.query(f"""
-            SELECT
-                AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS "대기업",
-                AVG(RATE_MODEL_GROUP_GENERAL_EMPLOYEE) AS "일반직장인",
-                AVG(RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE) AS "전문직",
-                AVG(RATE_MODEL_GROUP_EXECUTIVES) AS "임원",
-                AVG(RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED) AS "일반자영업",
-                AVG(RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED) AS "전문자영업",
-                AVG(RATE_MODEL_GROUP_OTHERS) AS "기타"
-            FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-        """)
+        occ_df = income_df[[
+            "RATE_LARGE_CO", "RATE_GENERAL_EMP", "RATE_PROFESSIONAL",
+            "RATE_EXEC", "RATE_SELF_EMP", "RATE_PRO_SELF_EMP", "RATE_OTHERS"
+        ]].mean().rename({
+            "RATE_LARGE_CO": "대기업", "RATE_GENERAL_EMP": "일반직장인",
+            "RATE_PROFESSIONAL": "전문직", "RATE_EXEC": "임원",
+            "RATE_SELF_EMP": "일반자영업", "RATE_PRO_SELF_EMP": "전문자영업",
+            "RATE_OTHERS": "기타"
+        }).to_frame().T
 
         st.subheader("소득 / 직업군 분포")
         c1, c2 = st.columns(2)
