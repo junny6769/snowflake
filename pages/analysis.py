@@ -476,20 +476,27 @@ with tab2:
         card_df["SALES_BILLION"] = card_df["SALES"] / 1_0000_0000
         gu_card_df["GU_AVG_BILLION"] = gu_card_df["GU_AVG_SALES"] / 1_0000_0000
 
-        merged = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].merge(
-            gu_card_df[["STANDARD_YEAR_MONTH", "GU_AVG_BILLION"]],
-            on="STANDARD_YEAR_MONTH", how="left"
-        )
-        line_long = merged.melt(
-            id_vars=["STANDARD_YEAR_MONTH"],
-            value_vars=["SALES_BILLION", "GU_AVG_BILLION"],
-            var_name="TYPE", value_name="VALUE"
-        )
-        line_long["TYPE"] = line_long["TYPE"].map({
-            "SALES_BILLION": selected_dong,
-            "GU_AVG_BILLION": f"{selected_gu} 평균"
-        })
+        show_gu_avg = st.checkbox("구 평균 비교", value=True, key="show_gu_avg")
 
+        if show_gu_avg:
+            merged = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].merge(
+                gu_card_df[["STANDARD_YEAR_MONTH", "GU_AVG_BILLION"]],
+                on="STANDARD_YEAR_MONTH", how="left"
+            )
+            line_long = merged.melt(
+                id_vars=["STANDARD_YEAR_MONTH"],
+                value_vars=["SALES_BILLION", "GU_AVG_BILLION"],
+                var_name="TYPE", value_name="VALUE"
+            )
+            line_long["TYPE"] = line_long["TYPE"].map({
+                "SALES_BILLION": selected_dong,
+                "GU_AVG_BILLION": f"{selected_gu} 평균"
+            })
+        else:
+            line_long = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].rename(
+                columns={"SALES_BILLION": "VALUE"}
+            )
+            line_long["TYPE"] = selected_dong
 
         chart_sales = alt.Chart(line_long).mark_line(point=True).encode(
             x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
@@ -501,8 +508,8 @@ with tab2:
                 alt.Tooltip("TYPE", title="구분"),
                 alt.Tooltip("VALUE:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title=f"{selected_category} 월별 매출 추이 (vs 구 평균)")
-        st.altair_chart(chart_sales, use_container_width=True)
+        ).properties(title=f"{selected_category} 월별 매출 추이")
+        st.altair_chart(chart_sales, width="stretch")
 
 
         wd_df_full = load_weekday_weekend_card_df(district_code, sales_col)
@@ -545,7 +552,7 @@ with tab2:
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
         )
-        st.altair_chart(chart_wd_sales, use_container_width=True)
+        st.altair_chart(chart_wd_sales, width="stretch")
 
     with c2:
         st.subheader("라이프스타일별 매출")
@@ -557,7 +564,7 @@ with tab2:
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
         )
-        st.altair_chart(chart_ls, use_container_width=True)
+        st.altair_chart(chart_ls, width="stretch")
 
 
     st.subheader("성별·연령대별 매출 분포")
@@ -588,7 +595,7 @@ with tab2:
                 alt.Tooltip("TOTAL_BILLION:Q", title="합계(억원)", format=",.1f"),
             ]
         ).properties(title=f"{selected_category} 성별·연령대별 매출")
-    st.altair_chart(chart_demo, use_container_width=True)
+    st.altair_chart(chart_demo, width="stretch")
 
 with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 유동인구 분석")
@@ -626,7 +633,7 @@ with tab3:
             color=alt.Color("TYPE:N", title="유형"),
             tooltip=["STANDARD_YEAR_MONTH", "TYPE", "POPULATION"]
         ).properties(title="유동인구 월별 추이")
-        st.altair_chart(chart_pop, use_container_width=True)
+        st.altair_chart(chart_pop, width="stretch")
 
         st.subheader("시간대별 유동인구")
         time_df = session.query(f"""
@@ -654,7 +661,7 @@ with tab3:
             color=alt.Color("TYPE:N", title="유형"),
             tooltip=["TIME_SLOT", "TYPE", "POPULATION"]
         ).properties(title="시간대별 유동인구 분포")
-        st.altair_chart(chart_time, use_container_width=True)
+        st.altair_chart(chart_time, width="stretch")
 
 with tab4:
     st.subheader(f"{selected_gu} {selected_dong} — 소득·자산 분석")
@@ -722,7 +729,7 @@ with tab4:
                 color=alt.Color("소득구간:N", sort=None, title="소득구간"),
                 tooltip=["소득구간", alt.Tooltip("비율(%):Q", format=".1f")]
             ).properties(title="소득 구간별 인구 비율")
-            st.altair_chart(chart_dist, use_container_width=True)
+            st.altair_chart(chart_dist, width="stretch")
 
         with c2:
             occ_long = occ_df.T.reset_index()
@@ -732,4 +739,4 @@ with tab4:
                 color=alt.Color("직업군:N", sort=None, title="직업군"),
                 tooltip=["직업군", alt.Tooltip("비율(%):Q", format=".1f")]
             ).properties(title="직업군별 인구 비율")
-            st.altair_chart(chart_occ, use_container_width=True)
+            st.altair_chart(chart_occ, width="stretch")
