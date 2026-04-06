@@ -393,6 +393,44 @@ with tab1:
         )
 
     st.caption(f"기준: {latest_ym[:4]}년 {latest_ym[4:]}월 | 구 평균 = {selected_gu} 내 전체 동 평균")
+    
+    summary_prompt = f"""
+        당신은 대한민국 상권 분석 보고서를 작성하는 전문 컨설턴트입니다.
+
+        [분석 대상]
+        - 지역: {selected_dong}
+        - 업종: {selected_category}
+
+        [핵심 지표 (구 평균 대비)]
+        1. 매출: 총 {format_amount(dong_total_sales)}원 (구 평균 대비 {'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)}원, {'상회' if sales_diff >= 0 else '하회'})
+        2. 업종 비중: {cat_ratio:.1f}% (구 평균 대비 {ratio_diff:+.1f}%p, {'경쟁 과밀 주의' if ratio_diff > 3 else '진입 여지 있음' if ratio_diff < -1 else '평균 수준'})
+        3. 유동인구: 총 {format_amount(dong_total_pop)}명 (구 평균 대비 {'+' if pop_diff >= 0 else ''}{format_amount(pop_diff)}명, {'상회' if pop_diff >= 0 else '하회'})
+        4. 평균소득: {dong_avg_median_income:,.0f}만원 (구 평균 대비 {income_diff:+,.0f}만원, {'상회' if income_diff >= 0 else '하회'})
+
+        [구 평균 상회 지표 수: {sum([sales_diff >= 0, pop_diff >= 0, income_diff >= 0, ratio_diff <= 0])}/4]
+
+        [판정 기준]
+        - 상: 4개 지표 중 3개 이상 긍정적이며, 매출 또는 유동인구가 구 평균 상회
+        - 중: 긍정 지표 2개, 또는 매출은 높으나 경쟁 과밀 등 리스크 존재
+        - 하: 긍정 지표 1개 이하, 또는 매출과 유동인구 모두 구 평균 하회
+
+        [출력 형식]
+        정확히 5문장, 하나의 문단으로 작성하세요.
+        - 1문장: "창업 성공 가능성은 [상/중/하]로 판정됩니다." 로 시작
+        - 2문장: 가장 강한 긍정 요인 (지표의 의미 해석 중심)
+        - 3문장: 두 번째 긍정 요인 또는 보완 강점
+        - 4문장: 핵심 리스크 1~2개 (수치 나열이 아닌 사업적 함의로 설명)
+        - 5문장: 종합 전망 + 성공 가능성을 높이기 위한 구체적 조건 1가지
+
+        [주의사항]
+        - 수치를 그대로 나열하지 말고, 사업적 의미로 해석하세요.
+        - "~원입니다" 식의 단순 보고가 아닌, "수요 기반이 탄탄하다" 등 분석적 표현을 사용하세요.
+        - 불릿포인트, 번호 매기기 없이 자연스러운 문단으로 작성하세요.
+        """
+    ai_summary = session.query(f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b', '{summary_prompt.replace("'", "''")}') AS SUMMARY
+    """)["SUMMARY"].iloc[0]
+    st.info(f"**AI 창업 성공률 예측:** {ai_summary}")
 
 with tab2:
     st.subheader(f"{selected_gu} {selected_dong} — {selected_category} 카드 매출 분석")
