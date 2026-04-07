@@ -56,62 +56,23 @@ if st.button("🔍 추천 받기", type="primary", use_container_width=True):
         query = f"""
         WITH latest AS (
             SELECT MAX(STANDARD_YEAR_MONTH) AS max_ym
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-        ),
-        card AS (
-            SELECT
-                c.CITY_CODE,
-                c.DISTRICT_CODE,
-                SUM(c.{sales_col}) AS TOTAL_CARD_SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO c, latest l
-            WHERE c.STANDARD_YEAR_MONTH = l.max_ym
-            GROUP BY c.CITY_CODE, c.DISTRICT_CODE
-        ),
-        pop AS (
-            SELECT
-                f.CITY_CODE,
-                f.DISTRICT_CODE,
-                SUM(f.RESIDENTIAL_POPULATION + f.WORKING_POPULATION + f.VISITING_POPULATION) AS TOTAL_POPULATION
-            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO f, latest l
-            WHERE f.STANDARD_YEAR_MONTH = l.max_ym
-            GROUP BY f.CITY_CODE, f.DISTRICT_CODE
-        ),
-        income AS (
-            SELECT
-                a.CITY_CODE,
-                a.DISTRICT_CODE,
-                ROUND(SUM(a.CUSTOMER_COUNT * a.MEDIAN_INCOME) / NULLIF(SUM(a.CUSTOMER_COUNT), 0) / 10) AS MEDIAN_INCOME
-            FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO a, latest l
-            WHERE a.STANDARD_YEAR_MONTH = l.max_ym AND a.INCOME_TYPE = '1'
-            GROUP BY a.CITY_CODE, a.DISTRICT_CODE
-        ),
-        combined AS (
-            SELECT
-                m.CITY_KOR_NAME,
-                m.DISTRICT_KOR_NAME,
-                c.TOTAL_CARD_SALES,
-                p.TOTAL_POPULATION,
-                i.MEDIAN_INCOME
-            FROM card c
-            JOIN pop p ON c.CITY_CODE = p.CITY_CODE AND c.DISTRICT_CODE = p.DISTRICT_CODE
-            JOIN income i ON c.CITY_CODE = i.CITY_CODE AND c.DISTRICT_CODE = i.DISTRICT_CODE
-            JOIN CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST m ON c.DISTRICT_CODE = m.DISTRICT_CODE
-            WHERE c.TOTAL_CARD_SALES > 0 AND p.TOTAL_POPULATION > 0 AND i.MEDIAN_INCOME > 0
+            FROM UNIFIED_DISTRICT_MONTHLY
         ),
         normalized AS (
             SELECT
-                CITY_KOR_NAME,
-                DISTRICT_KOR_NAME,
-                TOTAL_CARD_SALES,
-                TOTAL_POPULATION,
-                MEDIAN_INCOME,
+                u.CITY_KOR_NAME,
+                u.DISTRICT_KOR_NAME,
+                u.{sales_col} AS TOTAL_CARD_SALES,
+                u.TOTAL_POPULATION,
+                u.WEIGHTED_MEDIAN_INCOME,
                 (TOTAL_CARD_SALES - MIN(TOTAL_CARD_SALES) OVER()) * 1.0
                     / NULLIF(MAX(TOTAL_CARD_SALES) OVER() - MIN(TOTAL_CARD_SALES) OVER(), 0) AS norm_card,
-                (TOTAL_POPULATION - MIN(TOTAL_POPULATION) OVER()) * 1.0
-                    / NULLIF(MAX(TOTAL_POPULATION) OVER() - MIN(TOTAL_POPULATION) OVER(), 0) AS norm_pop,
-                (MEDIAN_INCOME - MIN(MEDIAN_INCOME) OVER()) * 1.0
-                    / NULLIF(MAX(MEDIAN_INCOME) OVER() - MIN(MEDIAN_INCOME) OVER(), 0) AS norm_income
-            FROM combined
+                (u.TOTAL_POPULATION - MIN(u.TOTAL_POPULATION) OVER()) * 1.0
+                    / NULLIF(MAX(u.TOTAL_POPULATION) OVER() - MIN(u.TOTAL_POPULATION) OVER(), 0) AS norm_pop,
+                (u.WEIGHTED_MEDIAN_INCOME - MIN(u.WEIGHTED_MEDIAN_INCOME) OVER()) * 1.0
+                    / NULLIF(MAX(u.WEIGHTED_MEDIAN_INCOME) OVER() - MIN(u.WEIGHTED_MEDIAN_INCOME) OVER(), 0) AS norm_income
+            FROM UNIFIED_DISTRICT_MONTHLY u, latest l
+            WHERE u.STANDARD_YEAR_MONTH = l.max_ym
         )
         SELECT
             CITY_KOR_NAME AS "구",
@@ -125,7 +86,7 @@ if st.button("🔍 추천 받기", type="primary", use_container_width=True):
             ROUND(norm_income * 100, 2) AS "소득점수",
             TOTAL_CARD_SALES AS "카드매출(원)",
             ROUND(TOTAL_POPULATION, 0) AS "유동인구(명)",
-            MEDIAN_INCOME AS "중위소득(만원)"
+            WEIGHTED_MEDIAN_INCOME AS "중위소득(만원)"
         FROM normalized
         ORDER BY "종합점수" DESC
         LIMIT 10
