@@ -54,7 +54,7 @@ def load_districts():
         ORDER BY m.CITY_KOR_NAME, m.DISTRICT_KOR_NAME
     """)
 
-# 선택한 동에서 실제 데이터가 있는 업종만 보여줌
+# Load monthly category sales and total sales for the selected district
 @st.cache_data
 def load_card_df(d_code, s_col):
     return session.query(f"""
@@ -67,6 +67,7 @@ def load_card_df(d_code, s_col):
         ORDER BY STANDARD_YEAR_MONTH
     """)
 
+# Load monthly average category sales across all districts in the same gu (for benchmark comparison)
 @st.cache_data
 def load_gu_card_df(c_code, s_col):
     return session.query(f"""
@@ -86,7 +87,85 @@ def load_gu_card_df(c_code, s_col):
         GROUP BY STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
+    
+@st.cache_data
+def load_weekday_weekend_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT STANDARD_YEAR_MONTH, WEEKDAY_WEEKEND,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+            GROUP BY STANDARD_YEAR_MONTH, WEEKDAY_WEEKEND
+        """)
 
+@st.cache_data
+def load_lifestyle_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT STANDARD_YEAR_MONTH, LIFESTYLE,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+              AND LIFESTYLE IS NOT NULL
+              AND LIFESTYLE != '*'
+            GROUP BY LIFESTYLE, STANDARD_YEAR_MONTH
+            ORDER BY SALES DESC
+        """)
+@st.cache_data
+def load_demography_card_df(d_code, s_col):
+    return session.query(f"""
+            SELECT GENDER, AGE_GROUP, STANDARD_YEAR_MONTH,
+                   SUM({s_col}) AS SALES
+            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            WHERE DISTRICT_CODE = '{d_code}'
+              AND AGE_GROUP != '*'
+            GROUP BY GENDER, AGE_GROUP, STANDARD_YEAR_MONTH
+            ORDER BY AGE_GROUP, GENDER
+        """)
+
+@st.cache_data
+def load_population_df(d_code):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH, TIME_SLOT,
+               SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
+               SUM(WORKING_POPULATION) AS WORKING,
+               SUM(VISITING_POPULATION) AS VISITING
+        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH, TIME_SLOT
+        ORDER BY STANDARD_YEAR_MONTH, TIME_SLOT
+    """)
+
+@st.cache_data
+def load_income_df(d_code):
+    return session.query(f"""
+        SELECT STANDARD_YEAR_MONTH,
+               SUM(CUSTOMER_COUNT) AS CUSTOMERS,
+               AVG(AVERAGE_INCOME) AS AVG_INCOME,
+               AVG(MEDIAN_INCOME) AS MEDIAN_INCOME,
+               AVG(AVERAGE_HOUSEHOLD_INCOME) AS AVG_HH_INCOME,
+               AVG(AVERAGE_ASSET_AMOUNT) AS AVG_ASSET,
+               AVG(AVERAGE_SCORE) AS AVG_CREDIT_SCORE,
+               AVG(RATE_INCOME_UNDER_20M) AS RATE_UNDER_20M,
+               AVG(RATE_INCOME_20M_TO_30M) AS RATE_20M_30M,
+               AVG(RATE_INCOME_30M_TO_40M) AS RATE_30M_40M,
+               AVG(RATE_INCOME_40M_TO_50M) AS RATE_40M_50M,
+               AVG(RATE_INCOME_50M_TO_60M) AS RATE_50M_60M,
+               AVG(RATE_INCOME_60M_TO_70M) AS RATE_60M_70M,
+               AVG(RATE_INCOME_OVER_70M) AS RATE_OVER_70M,
+               AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS RATE_LARGE_CO,
+               AVG(RATE_MODEL_GROUP_GENERAL_EMPLOYEE) AS RATE_GENERAL_EMP,
+               AVG(RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE) AS RATE_PROFESSIONAL,
+               AVG(RATE_MODEL_GROUP_EXECUTIVES) AS RATE_EXEC,
+               AVG(RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED) AS RATE_SELF_EMP,
+               AVG(RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED) AS RATE_PRO_SELF_EMP,
+               AVG(RATE_MODEL_GROUP_OTHERS) AS RATE_OTHERS
+        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+        WHERE DISTRICT_CODE = '{d_code}'
+        GROUP BY STANDARD_YEAR_MONTH
+        ORDER BY STANDARD_YEAR_MONTH
+    """)
+
+# 선택한 동에서 실제 데이터가 있는 업종만 보여줌
 @st.cache_data
 def load_available_categories(d_code):
     sales_cols = [v[0] for v in SALES_CATEGORIES.values()]
@@ -101,6 +180,40 @@ def load_available_categories(d_code):
         if df[sales_col].iloc[0] > 0:
             available.append(name)
     return available
+
+def geom_to_features(df, selected):
+    features = []
+    for _, row in df.iterrows():
+        try:
+            geom = json.loads(row["DISTRICT_GEOM"])
+        except (TypeError, ValueError):
+            continue
+        is_selected = row["DISTRICT_KOR_NAME"] == selected
+        features.append({
+            "type": "Feature",
+            "geometry": geom,
+            "properties": {
+                "district": str(row["DISTRICT_KOR_NAME"]) if row["DISTRICT_KOR_NAME"] else "",
+                "is_selected": is_selected,
+            },
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+def get_centroid(geojson_str):
+    try:
+        geom = json.loads(geojson_str)
+        coords = geom.get("coordinates", [])
+        if geom["type"] == "MultiPolygon":
+            pts = [p for poly in coords for ring in poly for p in ring]
+        elif geom["type"] == "Polygon":
+            pts = [p for ring in coords for p in ring]
+        else:
+            return None, None
+        lon = sum(p[0] for p in pts) / len(pts)
+        lat = sum(p[1] for p in pts) / len(pts)
+        return lat, lon
+    except Exception:
+        return None, None
 
 # 구 목록
 districts_df = load_districts()
@@ -140,40 +253,6 @@ df_map = session.query(
     f"FROM HACKATHON.DATA.M_SCCO_MST "
     f"WHERE CITY_KOR_NAME = '{selected_gu}'"
 )
-
-def geom_to_features(df, selected):
-    features = []
-    for _, row in df.iterrows():
-        try:
-            geom = json.loads(row["DISTRICT_GEOM"])
-        except (TypeError, ValueError):
-            continue
-        is_selected = row["DISTRICT_KOR_NAME"] == selected
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "district": str(row["DISTRICT_KOR_NAME"]) if row["DISTRICT_KOR_NAME"] else "",
-                "is_selected": is_selected,
-            },
-        })
-    return {"type": "FeatureCollection", "features": features}
-
-def get_centroid(geojson_str):
-    try:
-        geom = json.loads(geojson_str)
-        coords = geom.get("coordinates", [])
-        if geom["type"] == "MultiPolygon":
-            pts = [p for poly in coords for ring in poly for p in ring]
-        elif geom["type"] == "Polygon":
-            pts = [p for ring in coords for p in ring]
-        else:
-            return None, None
-        lon = sum(p[0] for p in pts) / len(pts)
-        lat = sum(p[1] for p in pts) / len(pts)
-        return lat, lon
-    except Exception:
-        return None, None
 
 geojson = geom_to_features(df_map, selected_dong)
 
@@ -300,17 +379,18 @@ with tab1:
     """)
     gu_avg_pop_val = gu_avg_pop["AVG_POP"].iloc[0] or 0
 
-    # 4) 평균소득
+    # 4) Average Median Income
     dong_income = session.query(f"""
-        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
         FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
         WHERE DISTRICT_CODE = '{district_code}'
           AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    dong_avg_income = dong_income["AVG_INCOME"].iloc[0] or 0
+    # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
+    dong_avg_median_income = (dong_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10 
 
     gu_avg_income = session.query(f"""
-        SELECT AVG(AVERAGE_INCOME) AS AVG_INCOME
+        SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
         FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
         WHERE DISTRICT_CODE IN (
             SELECT DISTINCT DISTRICT_CODE
@@ -319,13 +399,14 @@ with tab1:
         )
         AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    gu_avg_income_val = gu_avg_income["AVG_INCOME"].iloc[0] or 0
+    # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
+    gu_avg_median_income_val = (gu_avg_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10
 
     # 구 평균 대비 delta 계산
     sales_diff = dong_total_sales - gu_avg_sales
     ratio_diff = cat_ratio - gu_avg_cat_ratio
     pop_diff = dong_total_pop - gu_avg_pop_val
-    income_diff = dong_avg_income - gu_avg_income_val
+    income_diff = dong_avg_median_income - gu_avg_median_income_val
 
     # 카드 표시
     c1, c2, c3, c4 = st.columns(4)
@@ -349,12 +430,50 @@ with tab1:
         )
     with c4:
         st.metric(
-            label="평균소득",
-            value=f"{dong_avg_income:,.0f}만원",
+            label="평균 중위 소득",
+            value=f"{dong_avg_median_income:,.0f}만원",
             delta=f"{income_diff:+,.0f}만원 vs 구 평균"
         )
 
     st.caption(f"기준: {latest_ym[:4]}년 {latest_ym[4:]}월 | 구 평균 = {selected_gu} 내 전체 동 평균")
+    
+    summary_prompt = f"""
+        당신은 대한민국 상권 분석 보고서를 작성하는 전문 컨설턴트입니다.
+
+        [분석 대상]
+        - 지역: {selected_dong}
+        - 업종: {selected_category}
+
+        [핵심 지표 (구 평균 대비)]
+        1. 매출: 총 {format_amount(dong_total_sales)}원 (구 평균 대비 {'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)}원, {'상회' if sales_diff >= 0 else '하회'})
+        2. 업종 비중: {cat_ratio:.1f}% (구 평균 대비 {ratio_diff:+.1f}%p, {'경쟁 과밀 주의' if ratio_diff > 3 else '진입 여지 있음' if ratio_diff < -1 else '평균 수준'})
+        3. 유동인구: 총 {format_amount(dong_total_pop)}명 (구 평균 대비 {'+' if pop_diff >= 0 else ''}{format_amount(pop_diff)}명, {'상회' if pop_diff >= 0 else '하회'})
+        4. 평균소득: {dong_avg_median_income:,.0f}만원 (구 평균 대비 {income_diff:+,.0f}만원, {'상회' if income_diff >= 0 else '하회'})
+
+        [구 평균 상회 지표 수: {sum([sales_diff >= 0, pop_diff >= 0, income_diff >= 0, ratio_diff <= 0])}/4]
+
+        [판정 기준]
+        - 상: 4개 지표 중 3개 이상 긍정적이며, 매출 또는 유동인구가 구 평균 상회
+        - 중: 긍정 지표 2개, 또는 매출은 높으나 경쟁 과밀 등 리스크 존재
+        - 하: 긍정 지표 1개 이하, 또는 매출과 유동인구 모두 구 평균 하회
+
+        [출력 형식]
+        정확히 5문장, 하나의 문단으로 작성하세요.
+        - 1문장: "창업 성공 가능성은 [상/중/하]로 판정됩니다." 로 시작
+        - 2문장: 가장 강한 긍정 요인 (지표의 의미 해석 중심)
+        - 3문장: 두 번째 긍정 요인 또는 보완 강점
+        - 4문장: 핵심 리스크 1~2개 (수치 나열이 아닌 사업적 함의로 설명)
+        - 5문장: 종합 전망 + 성공 가능성을 높이기 위한 구체적 조건 1가지
+
+        [주의사항]
+        - 수치를 그대로 나열하지 말고, 사업적 의미로 해석하세요.
+        - "~원입니다" 식의 단순 보고가 아닌, "수요 기반이 탄탄하다" 등 분석적 표현을 사용하세요.
+        - 불릿포인트, 번호 매기기 없이 자연스러운 문단으로 작성하세요.
+        """
+    ai_summary = session.query(f"""
+        SELECT SNOWFLAKE.CORTEX.COMPLETE('llama3.1-70b', '{summary_prompt.replace("'", "''")}') AS SUMMARY
+    """)["SUMMARY"].iloc[0]
+    st.info(f"**AI 창업 성공률 예측:** {ai_summary}")
 
 with tab2:
     st.subheader(f"{selected_gu} {selected_dong} — {selected_category} 카드 매출 분석")
@@ -370,7 +489,13 @@ with tab2:
     with col_start:
         start_ym = st.selectbox("시작 기간", all_ym, index=0, key="start_ym")
     with col_end:
-        end_ym = st.selectbox("종료 기간", all_ym, index=len(all_ym) - 1, key="end_ym")
+        # end options are limited to months >= start
+        end_options = [ym for ym in all_ym if ym >= start_ym]
+        end_ym = st.selectbox("종료 기간", end_options, index=len(end_options) - 1, key="end_ym")
+
+    if start_ym > end_ym:
+        st.error("시작 기간은 종료 기간보다 늦을 수 없습니다.")
+        st.stop()
 
     card_df_full = load_card_df(district_code, sales_col)
     gu_card_df_full = load_gu_card_df(city_code, sales_col)
@@ -394,20 +519,27 @@ with tab2:
         card_df["SALES_BILLION"] = card_df["SALES"] / 1_0000_0000
         gu_card_df["GU_AVG_BILLION"] = gu_card_df["GU_AVG_SALES"] / 1_0000_0000
 
-        merged = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].merge(
-            gu_card_df[["STANDARD_YEAR_MONTH", "GU_AVG_BILLION"]],
-            on="STANDARD_YEAR_MONTH", how="left"
-        )
-        line_long = merged.melt(
-            id_vars=["STANDARD_YEAR_MONTH"],
-            value_vars=["SALES_BILLION", "GU_AVG_BILLION"],
-            var_name="TYPE", value_name="VALUE"
-        )
-        line_long["TYPE"] = line_long["TYPE"].map({
-            "SALES_BILLION": selected_dong,
-            "GU_AVG_BILLION": f"{selected_gu} 평균"
-        })
+        show_gu_avg = st.checkbox("구 평균 비교", value=True, key="show_gu_avg")
 
+        if show_gu_avg:
+            merged = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].merge(
+                gu_card_df[["STANDARD_YEAR_MONTH", "GU_AVG_BILLION"]],
+                on="STANDARD_YEAR_MONTH", how="left"
+            )
+            line_long = merged.melt(
+                id_vars=["STANDARD_YEAR_MONTH"],
+                value_vars=["SALES_BILLION", "GU_AVG_BILLION"],
+                var_name="TYPE", value_name="VALUE"
+            )
+            line_long["TYPE"] = line_long["TYPE"].map({
+                "SALES_BILLION": selected_dong,
+                "GU_AVG_BILLION": f"{selected_gu} 평균"
+            })
+        else:
+            line_long = card_df[["STANDARD_YEAR_MONTH", "SALES_BILLION"]].rename(
+                columns={"SALES_BILLION": "VALUE"}
+            )
+            line_long["TYPE"] = selected_dong
 
         chart_sales = alt.Chart(line_long).mark_line(point=True).encode(
             x=alt.X("STANDARD_YEAR_MONTH:N", title="기준년월"),
@@ -419,18 +551,16 @@ with tab2:
                 alt.Tooltip("TYPE", title="구분"),
                 alt.Tooltip("VALUE:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title=f"{selected_category} 월별 매출 추이 (vs 구 평균)")
-        st.altair_chart(chart_sales, use_container_width=True)
+        ).properties(title=f"{selected_category} 월별 매출 추이")
+        st.altair_chart(chart_sales, width="stretch")
 
-        st.subheader("평일/주말 매출 비교")
-        wd_df = session.query(f"""
-            SELECT WEEKDAY_WEEKEND,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-            GROUP BY WEEKDAY_WEEKEND
-        """)
+
+        wd_df_full = load_weekday_weekend_card_df(district_code, sales_col)
+        wd_df = wd_df_full[
+            (wd_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (wd_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+        wd_df = wd_df.groupby("WEEKDAY_WEEKEND", as_index=False)["SALES"].sum()
         wd_df["WEEKDAY_WEEKEND"] = wd_df["WEEKDAY_WEEKEND"].map({"W": "평일", "H": "주말"})
         wd_df["SALES_BILLION"] = wd_df["SALES"] / 1_0000_0000
 
@@ -444,24 +574,19 @@ with tab2:
             "L06": "여가·문화형",
         }
 
-        st.subheader("라이프스타일별 매출")
-        ls_df = session.query(f"""
-            SELECT LIFESTYLE,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND STANDARD_YEAR_MONTH BETWEEN '{start_ym}' AND '{end_ym}'
-              AND LIFESTYLE IS NOT NULL
-              AND LIFESTYLE != '*'
-            GROUP BY LIFESTYLE
-            ORDER BY SALES DESC
-        """)
+        ls_df_full = load_lifestyle_card_df(district_code, sales_col)
+        ls_df = ls_df_full[
+            (ls_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (ls_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+        ls_df = ls_df.groupby("LIFESTYLE", as_index=False)["SALES"].sum()
         ls_df["LIFESTYLE"] = ls_df["LIFESTYLE"].map(LIFESTYLE_MAP).fillna(ls_df["LIFESTYLE"])
         ls_df["SALES_BILLION"] = ls_df["SALES"] / 1_0000_0000
 
     c1, c2 = st.columns(2)
 
     with c1:
+        st.subheader("평일/주말 매출 비교")
         chart_wd_sales = alt.Chart(wd_df).mark_arc().encode(
             theta=alt.Theta("SALES_BILLION:Q"),
             color=alt.Color("WEEKDAY_WEEKEND:N", title="구분"),
@@ -469,10 +594,11 @@ with tab2:
                 alt.Tooltip("WEEKDAY_WEEKEND", title="구분"),
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title="평일/주말 매출")
-        st.altair_chart(chart_wd_sales, use_container_width=True)
+        )
+        st.altair_chart(chart_wd_sales, width="stretch")
 
     with c2:
+        st.subheader("라이프스타일별 매출")
         chart_ls = alt.Chart(ls_df).mark_arc().encode(
             theta=alt.Theta("SALES_BILLION:Q"),
             color=alt.Color("LIFESTYLE:N", title="라이프스타일"),
@@ -480,50 +606,60 @@ with tab2:
                 alt.Tooltip("LIFESTYLE", title="라이프스타일"),
                 alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
             ]
-        ).properties(title="라이프스타일별 매출")
-
-        st.altair_chart(chart_ls, use_container_width=True)
+        )
+        st.altair_chart(chart_ls, width="stretch")
 
 
     st.subheader("성별·연령대별 매출 분포")
-    demo_df = session.query(f"""
-            SELECT GENDER, AGE_GROUP,
-                   SUM({sales_col}) AS SALES
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-              AND AGE_GROUP != '*'
-            GROUP BY GENDER, AGE_GROUP
-            ORDER BY AGE_GROUP, GENDER
-        """)
+    demo_df_full = load_demography_card_df(district_code, sales_col)
+    demo_df = demo_df_full[
+            (demo_df_full["STANDARD_YEAR_MONTH"] >= start_ym) &
+            (demo_df_full["STANDARD_YEAR_MONTH"] <= end_ym)
+        ].copy()
+
+    # combine monthly data by summing across the selected period
+    demo_df = demo_df.groupby(["GENDER", "AGE_GROUP"], as_index=False)["SALES"].sum()
 
     demo_df["GENDER"] = demo_df["GENDER"].map({"M": "남성", "F": "여성"})
     demo_df["AGE_GROUP"] = demo_df["AGE_GROUP"].astype(str)
     demo_df["SALES_BILLION"] = demo_df["SALES"] / 1_0000_0000
+
+    total_df = demo_df.groupby("AGE_GROUP", as_index=False)["SALES_BILLION"].sum().rename(columns={"SALES_BILLION": "TOTAL_BILLION"})
+    demo_df = demo_df.merge(total_df, on="AGE_GROUP")
+
     chart_demo = alt.Chart(demo_df).mark_bar().encode(
             x=alt.X("AGE_GROUP:N", title="연령대"),
-            y=alt.Y("SALES_BILLION:Q", title="매출액(원)"),
+            y=alt.Y("SALES_BILLION:Q", title="매출액(억원)"),
             color=alt.Color("GENDER:N", title="성별"),
             tooltip=[
                 alt.Tooltip("AGE_GROUP", title="연령대"),
                 alt.Tooltip("GENDER", title="성별"),
-                alt.Tooltip("SALES_BILLION:Q", title="매출액(원)", format=",.1f")
+                alt.Tooltip("SALES_BILLION:Q", title="매출액(억원)", format=",.1f"),
+                alt.Tooltip("TOTAL_BILLION:Q", title="합계(억원)", format=",.1f"),
             ]
         ).properties(title=f"{selected_category} 성별·연령대별 매출")
-    st.altair_chart(chart_demo, use_container_width=True)
+    st.altair_chart(chart_demo, width="stretch")
 
 with tab3:
     st.subheader(f"{selected_gu} {selected_dong} — 유동인구 분석")
 
-    pop_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
-               SUM(WORKING_POPULATION) AS WORKING,
-               SUM(VISITING_POPULATION) AS VISITING
-        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    pop_df_full = load_population_df(district_code)
+    all_ym_pop = sorted(pop_df_full["STANDARD_YEAR_MONTH"].unique().tolist())
+
+    col_start3, col_end3 = st.columns(2)
+    with col_start3:
+        start_ym3 = st.selectbox("시작 기간", all_ym_pop, index=0, key="start_ym3")
+    with col_end3:
+        end_options3 = [ym for ym in all_ym_pop if ym >= start_ym3]
+        end_ym3 = st.selectbox("종료 기간", end_options3, index=len(end_options3) - 1, key="end_ym3")
+
+    pop_filtered = pop_df_full[
+        (pop_df_full["STANDARD_YEAR_MONTH"] >= start_ym3) &
+        (pop_df_full["STANDARD_YEAR_MONTH"] <= end_ym3)
+    ]
+    pop_df = pop_filtered.groupby("STANDARD_YEAR_MONTH", as_index=False)[
+        ["RESIDENTIAL", "WORKING", "VISITING"]
+    ].sum()
 
     if pop_df.empty:
         st.info("해당 조건에 맞는 유동인구 데이터가 없습니다.")
@@ -547,19 +683,12 @@ with tab3:
             color=alt.Color("TYPE:N", title="유형"),
             tooltip=["STANDARD_YEAR_MONTH", "TYPE", "POPULATION"]
         ).properties(title="유동인구 월별 추이")
-        st.altair_chart(chart_pop, use_container_width=True)
+        st.altair_chart(chart_pop, width="stretch")
 
         st.subheader("시간대별 유동인구")
-        time_df = session.query(f"""
-            SELECT TIME_SLOT,
-                   SUM(RESIDENTIAL_POPULATION) AS RESIDENTIAL,
-                   SUM(WORKING_POPULATION) AS WORKING,
-                   SUM(VISITING_POPULATION) AS VISITING
-            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-            GROUP BY TIME_SLOT
-            ORDER BY TIME_SLOT
-             """)
+        time_df = pop_filtered.groupby("TIME_SLOT", as_index=False)[
+            ["RESIDENTIAL", "WORKING", "VISITING"]
+        ].sum().sort_values("TIME_SLOT")
 
         time_long = time_df.melt(
             id_vars=["TIME_SLOT"],
@@ -575,24 +704,25 @@ with tab3:
             color=alt.Color("TYPE:N", title="유형"),
             tooltip=["TIME_SLOT", "TYPE", "POPULATION"]
         ).properties(title="시간대별 유동인구 분포")
-        st.altair_chart(chart_time, use_container_width=True)
+        st.altair_chart(chart_time, width="stretch")
 
 with tab4:
     st.subheader(f"{selected_gu} {selected_dong} — 소득·자산 분석")
 
-    income_df = session.query(f"""
-        SELECT STANDARD_YEAR_MONTH,
-               SUM(CUSTOMER_COUNT) AS CUSTOMERS,
-               AVG(AVERAGE_INCOME) AS AVG_INCOME,
-               AVG(MEDIAN_INCOME) AS MEDIAN_INCOME,
-               AVG(AVERAGE_HOUSEHOLD_INCOME) AS AVG_HH_INCOME,
-               AVG(AVERAGE_ASSET_AMOUNT) AS AVG_ASSET,
-               AVG(AVERAGE_SCORE) AS AVG_CREDIT_SCORE
-        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-        WHERE DISTRICT_CODE = '{district_code}'
-        GROUP BY STANDARD_YEAR_MONTH
-        ORDER BY STANDARD_YEAR_MONTH
-    """)
+    income_df_full = load_income_df(district_code)
+    all_ym_income = sorted(income_df_full["STANDARD_YEAR_MONTH"].unique().tolist())
+
+    col_start4, col_end4 = st.columns(2)
+    with col_start4:
+        start_ym4 = st.selectbox("시작 기간", all_ym_income, index=0, key="start_ym4")
+    with col_end4:
+        end_options4 = [ym for ym in all_ym_income if ym >= start_ym4]
+        end_ym4 = st.selectbox("종료 기간", end_options4, index=len(end_options4) - 1, key="end_ym4")
+
+    income_df = income_df_full[
+        (income_df_full["STANDARD_YEAR_MONTH"] >= start_ym4) &
+        (income_df_full["STANDARD_YEAR_MONTH"] <= end_ym4)
+    ].copy()
 
     if income_df.empty:
         st.info("해당 조건에 맞는 소득·자산 데이터가 없습니다.")
@@ -607,31 +737,25 @@ with tab4:
         im3.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
         im4.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
 
-        dist_df = session.query(f"""
-            SELECT
-                AVG(RATE_INCOME_UNDER_20M) AS "~2천만원",
-                AVG(RATE_INCOME_20M_TO_30M) AS "2~3천만원",
-                AVG(RATE_INCOME_30M_TO_40M) AS "3~4천만원",
-                AVG(RATE_INCOME_40M_TO_50M) AS "4~5천만원",
-                AVG(RATE_INCOME_50M_TO_60M) AS "5~6천만원",
-                AVG(RATE_INCOME_60M_TO_70M) AS "6~7천만원",
-                AVG(RATE_INCOME_OVER_70M) AS "7천만원~"
-            FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-        """)
+        dist_df = income_df[[
+            "RATE_UNDER_20M", "RATE_20M_30M", "RATE_30M_40M", "RATE_40M_50M",
+            "RATE_50M_60M", "RATE_60M_70M", "RATE_OVER_70M"
+        ]].mean().rename({
+            "RATE_UNDER_20M": "~2천만원", "RATE_20M_30M": "2~3천만원",
+            "RATE_30M_40M": "3~4천만원", "RATE_40M_50M": "4~5천만원",
+            "RATE_50M_60M": "5~6천만원", "RATE_60M_70M": "6~7천만원",
+            "RATE_OVER_70M": "7천만원~"
+        }).to_frame().T
 
-        occ_df = session.query(f"""
-            SELECT
-                AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS "대기업",
-                AVG(RATE_MODEL_GROUP_GENERAL_EMPLOYEE) AS "일반직장인",
-                AVG(RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE) AS "전문직",
-                AVG(RATE_MODEL_GROUP_EXECUTIVES) AS "임원",
-                AVG(RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED) AS "일반자영업",
-                AVG(RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED) AS "전문자영업",
-                AVG(RATE_MODEL_GROUP_OTHERS) AS "기타"
-            FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-            WHERE DISTRICT_CODE = '{district_code}'
-        """)
+        occ_df = income_df[[
+            "RATE_LARGE_CO", "RATE_GENERAL_EMP", "RATE_PROFESSIONAL",
+            "RATE_EXEC", "RATE_SELF_EMP", "RATE_PRO_SELF_EMP", "RATE_OTHERS"
+        ]].mean().rename({
+            "RATE_LARGE_CO": "대기업", "RATE_GENERAL_EMP": "일반직장인",
+            "RATE_PROFESSIONAL": "전문직", "RATE_EXEC": "임원",
+            "RATE_SELF_EMP": "일반자영업", "RATE_PRO_SELF_EMP": "전문자영업",
+            "RATE_OTHERS": "기타"
+        }).to_frame().T
 
         st.subheader("소득 / 직업군 분포")
         c1, c2 = st.columns(2)
@@ -643,7 +767,7 @@ with tab4:
                 color=alt.Color("소득구간:N", sort=None, title="소득구간"),
                 tooltip=["소득구간", alt.Tooltip("비율(%):Q", format=".1f")]
             ).properties(title="소득 구간별 인구 비율")
-            st.altair_chart(chart_dist, use_container_width=True)
+            st.altair_chart(chart_dist, width="stretch")
 
         with c2:
             occ_long = occ_df.T.reset_index()
@@ -653,4 +777,4 @@ with tab4:
                 color=alt.Color("직업군:N", sort=None, title="직업군"),
                 tooltip=["직업군", alt.Tooltip("비율(%):Q", format=".1f")]
             ).properties(title="직업군별 인구 비율")
-            st.altair_chart(chart_occ, use_container_width=True)
+            st.altair_chart(chart_occ, width="stretch")
