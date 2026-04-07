@@ -62,7 +62,7 @@ if st.button("🔍 추천 받기", type="primary", use_container_width=True):
             SELECT
                 c.CITY_CODE,
                 c.DISTRICT_CODE,
-                SUM(c.TOTAL_SALES) AS TOTAL_CARD_SALES
+                SUM(c.{sales_col}) AS TOTAL_CARD_SALES
             FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO c, latest l
             WHERE c.STANDARD_YEAR_MONTH = l.max_ym
             GROUP BY c.CITY_CODE, c.DISTRICT_CODE
@@ -151,22 +151,3 @@ if st.button("🔍 추천 받기", type="primary", use_container_width=True):
             use_container_width=True,
             hide_index=True,
         )
-
-        score_df = df.melt(
-            id_vars=["동"],
-            value_vars=["매출점수", "소득점수", "유동인구점수",],
-            var_name="지표",
-            value_name="점수",
-        )
-        chart = (
-            alt.Chart(score_df)
-            .mark_bar()
-            .encode(
-                x=alt.X("동:N", sort=df["동"].tolist(), title=None),
-                y=alt.Y("점수:Q", title="점수 (100점 만점)"),
-                color=alt.Color("지표:N", scale=alt.Scale(scheme="tableau10")),
-                xOffset="지표:N",
-            )
-            .properties(title=f"{industry} 업종 Top 10 상권 지표 비교", height=400)
-        )
-        st.altair_chart(chart, use_container_width=True)
