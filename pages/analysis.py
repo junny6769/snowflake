@@ -46,12 +46,9 @@ def format_amount(val):
 @st.cache_data
 def load_districts():
     return session.query("""
-        SELECT DISTINCT m.CITY_KOR_NAME, m.DISTRICT_KOR_NAME, m.CITY_CODE, m.DISTRICT_CODE
-        FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST m
-        WHERE m.DISTRICT_CODE IN (
-            SELECT DISTINCT DISTRICT_CODE FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-        )
-        ORDER BY m.CITY_KOR_NAME, m.DISTRICT_KOR_NAME
+        SELECT DISTINCT CITY_KOR_NAME, DISTRICT_KOR_NAME, CITY_CODE, DISTRICT_CODE
+        FROM UNIFIED_DISTRICT_MONTHLY
+        ORDER BY CITY_KOR_NAME, DISTRICT_KOR_NAME
     """)
 
 # Load monthly category sales and total sales for the selected district
@@ -59,11 +56,10 @@ def load_districts():
 def load_card_df(d_code, s_col):
     return session.query(f"""
         SELECT STANDARD_YEAR_MONTH,
-               SUM({s_col}) AS SALES,
-               SUM(TOTAL_SALES) AS TOTAL_SALES
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+               {s_col} AS SALES,
+               TOTAL_SALES
+        FROM UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{d_code}'
-        GROUP BY STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
 
@@ -72,19 +68,10 @@ def load_card_df(d_code, s_col):
 def load_gu_card_df(c_code, s_col):
     return session.query(f"""
         SELECT STANDARD_YEAR_MONTH,
-               AVG(d_sales) AS GU_AVG_SALES
-        FROM (
-            SELECT DISTRICT_CODE, STANDARD_YEAR_MONTH,
-                   SUM({s_col}) AS d_sales
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE IN (
-                SELECT DISTINCT DISTRICT_CODE
-                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-                WHERE CITY_CODE = '{c_code}'
-            )
-            GROUP BY DISTRICT_CODE, STANDARD_YEAR_MONTH
-        )
-        GROUP BY STANDARD_YEAR_MONTH
+               AVG({s_col}) AS GU_AVG_SALES
+        FROM UNIFIED_DISTRICT_MONTHLY
+        WHERE CITY_CODE = '{c_code}'
+        GROUP BY CITY_CODE, STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
     
@@ -110,6 +97,7 @@ def load_lifestyle_card_df(d_code, s_col):
             GROUP BY LIFESTYLE, STANDARD_YEAR_MONTH
             ORDER BY SALES DESC
         """)
+
 @st.cache_data
 def load_demography_card_df(d_code, s_col):
     return session.query(f"""
@@ -139,29 +127,25 @@ def load_population_df(d_code):
 def load_income_df(d_code):
     return session.query(f"""
         SELECT STANDARD_YEAR_MONTH,
-               SUM(CUSTOMER_COUNT) AS CUSTOMERS,
-               AVG(AVERAGE_INCOME) AS AVG_INCOME,
-               AVG(MEDIAN_INCOME) AS MEDIAN_INCOME,
-               AVG(AVERAGE_HOUSEHOLD_INCOME) AS AVG_HH_INCOME,
-               AVG(AVERAGE_ASSET_AMOUNT) AS AVG_ASSET,
-               AVG(AVERAGE_SCORE) AS AVG_CREDIT_SCORE,
-               AVG(RATE_INCOME_UNDER_20M) AS RATE_UNDER_20M,
-               AVG(RATE_INCOME_20M_TO_30M) AS RATE_20M_30M,
-               AVG(RATE_INCOME_30M_TO_40M) AS RATE_30M_40M,
-               AVG(RATE_INCOME_40M_TO_50M) AS RATE_40M_50M,
-               AVG(RATE_INCOME_50M_TO_60M) AS RATE_50M_60M,
-               AVG(RATE_INCOME_60M_TO_70M) AS RATE_60M_70M,
-               AVG(RATE_INCOME_OVER_70M) AS RATE_OVER_70M,
-               AVG(RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE) AS RATE_LARGE_CO,
-               AVG(RATE_MODEL_GROUP_GENERAL_EMPLOYEE) AS RATE_GENERAL_EMP,
-               AVG(RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE) AS RATE_PROFESSIONAL,
-               AVG(RATE_MODEL_GROUP_EXECUTIVES) AS RATE_EXEC,
-               AVG(RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED) AS RATE_SELF_EMP,
-               AVG(RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED) AS RATE_PRO_SELF_EMP,
-               AVG(RATE_MODEL_GROUP_OTHERS) AS RATE_OTHERS
-        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+               MEDIAN_INCOME,
+               AVERAGE_ASSET_AMOUNT AS AVG_ASSET,
+               AVERAGE_SCORE AS AVG_CREDIT_SCORE,
+               RATE_INCOME_UNDER_20M AS RATE_UNDER_20M,
+               RATE_INCOME_20M_30M AS RATE_20M_30M,
+               RATE_INCOME_30M_40M AS RATE_30M_40M,
+               RATE_INCOME_40M_50M AS RATE_40M_50M,
+               RATE_INCOME_50M_60M AS RATE_50M_60M,
+               RATE_INCOME_60M_70M AS RATE_60M_70M,
+               RATE_INCOME_OVER_70M AS RATE_OVER_70M,
+               RATE_MODEL_GROUP_LARGE_COMPANY_EMPLOYEE AS RATE_LARGE_CO,
+               RATE_MODEL_GROUP_GENERAL_EMPLOYEE AS RATE_GENERAL_EMP,
+               RATE_MODEL_GROUP_PROFESSIONAL_EMPLOYEE AS RATE_PROFESSIONAL,
+               RATE_MODEL_GROUP_EXECUTIVES AS RATE_EXEC,
+               RATE_MODEL_GROUP_GENERAL_SELF_EMPLOYED AS RATE_SELF_EMP,
+               RATE_MODEL_GROUP_PROFESSIONAL_SELF_EMPLOYED AS RATE_PRO_SELF_EMP,
+               RATE_MODEL_GROUP_OTHERS AS RATE_OTHERS
+        FROM UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{d_code}'
-        GROUP BY STANDARD_YEAR_MONTH
         ORDER BY STANDARD_YEAR_MONTH
     """)
 
@@ -172,7 +156,7 @@ def load_available_categories(d_code):
     sum_exprs = ", ".join([f"SUM({c}) AS {c}" for c in sales_cols])
     df = session.query(f"""
         SELECT {sum_exprs}
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        FROM UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{d_code}'
     """)
     available = []
@@ -250,7 +234,7 @@ DISTRICT_COLORS = {
 # ── 지도 ─────────────────────────────────────────────────────────────────────
 df_map = session.query(
     f"SELECT CITY_KOR_NAME, DISTRICT_KOR_NAME, DISTRICT_GEOM "
-    f"FROM HACKATHON.DATA.M_SCCO_MST "
+    f"FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST "
     f"WHERE CITY_KOR_NAME = '{selected_gu}'"
 )
 
@@ -313,97 +297,74 @@ with tab1:
 
     latest_ym = session.query(f"""
         SELECT MAX(STANDARD_YEAR_MONTH) AS YM
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{district_code}'
     """)["YM"].iloc[0]
 
     # 1) 해당 동 총매출 & 업종별 매출
     dong_card = session.query(f"""
         SELECT
-            SUM(TOTAL_SALES) AS TOTAL_SALES,
-            SUM({sales_col}) AS CATEGORY_SALES
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+            TOTAL_SALES,
+            {sales_col} AS CATEGORY_SALES
+        FROM UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{district_code}'
           AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    dong_total_sales = dong_card["TOTAL_SALES"].iloc[0] or 0
-    dong_cat_sales = dong_card["CATEGORY_SALES"].iloc[0] or 0
+    dong_total_sales = float(dong_card["TOTAL_SALES"].iloc[0] or 0)
+    dong_cat_sales = float(dong_card["CATEGORY_SALES"].iloc[0] or 0)
     cat_ratio = (dong_cat_sales / dong_total_sales * 100) if dong_total_sales else 0
 
     # 2) 구 평균 총매출 & 업종비중
     gu_avg = session.query(f"""
         SELECT
-            AVG(d_total) AS AVG_TOTAL_SALES,
-            AVG(d_cat / NULLIF(d_total, 0)) * 100 AS AVG_CAT_RATIO
-        FROM (
-            SELECT
-                DISTRICT_CODE,
-                SUM(TOTAL_SALES) AS d_total,
-                SUM({sales_col}) AS d_cat
-            FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
-            WHERE DISTRICT_CODE IN (
-                SELECT DISTINCT DISTRICT_CODE
-                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-                WHERE CITY_CODE = '{city_code}'
-            )
-            AND STANDARD_YEAR_MONTH = '{latest_ym}'
-            GROUP BY DISTRICT_CODE
-        )
+            AVG(TOTAL_SALES) AS AVG_TOTAL_SALES,
+            AVG({sales_col}) AS AVG_CAT_SALES
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
+        WHERE CITY_CODE = '{city_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    gu_avg_sales = gu_avg["AVG_TOTAL_SALES"].iloc[0] or 0
-    gu_avg_cat_ratio = gu_avg["AVG_CAT_RATIO"].iloc[0] or 0
+    gu_avg_sales = float(gu_avg["AVG_TOTAL_SALES"].iloc[0] or 0)
+    gu_avg_cat_sales = float(gu_avg["AVG_CAT_SALES"].iloc[0] or 0)
+    gu_avg_cat_ratio = (gu_avg_cat_sales / gu_avg_sales * 100) if dong_total_sales else 0
 
     # 3) 유동인구
     dong_pop = session.query(f"""
-        SELECT SUM(RESIDENTIAL_POPULATION + WORKING_POPULATION + VISITING_POPULATION) AS TOTAL_POP
-        FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
+        SELECT TOTAL_POPULATION AS TOTAL_POP
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{district_code}'
           AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    dong_total_pop = dong_pop["TOTAL_POP"].iloc[0] or 0
+    dong_total_pop = float(dong_pop["TOTAL_POP"].iloc[0] or 0)
 
     gu_avg_pop = session.query(f"""
-        SELECT AVG(d_pop) AS AVG_POP
-        FROM (
-            SELECT DISTRICT_CODE,
-                   SUM(RESIDENTIAL_POPULATION + WORKING_POPULATION + VISITING_POPULATION) AS d_pop
-            FROM CONSUMPTION_ASSET.GRANDATA.FLOATING_POPULATION_INFO
-            WHERE DISTRICT_CODE IN (
-                SELECT DISTINCT DISTRICT_CODE
-                FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-                WHERE CITY_CODE = '{city_code}'
-            )
-            AND STANDARD_YEAR_MONTH = '{latest_ym}'
-            GROUP BY DISTRICT_CODE
-        )
+        SELECT AVG(TOTAL_POPULATION) AS AVG_POP
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
+        WHERE CITY_CODE = '{city_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
-    gu_avg_pop_val = gu_avg_pop["AVG_POP"].iloc[0] or 0
+    gu_avg_pop_val = float(gu_avg_pop["AVG_POP"].iloc[0] or 0)
 
     # 4) Average Median Income
     dong_income = session.query(f"""
-        SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
-        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
+        SELECT MEDIAN_INCOME AS AVG_MEDIAN_INCOME
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{district_code}'
           AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
     # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
-    dong_avg_median_income = (dong_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10 
+    dong_avg_median_income = float(dong_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10
 
     gu_avg_income = session.query(f"""
         SELECT AVG(MEDIAN_INCOME) AS AVG_MEDIAN_INCOME
-        FROM CONSUMPTION_ASSET.GRANDATA.ASSET_INCOME_INFO
-        WHERE DISTRICT_CODE IN (
-            SELECT DISTINCT DISTRICT_CODE
-            FROM CONSUMPTION_ASSET.GRANDATA.M_SCCO_MST
-            WHERE CITY_CODE = '{city_code}'
-        )
-        AND STANDARD_YEAR_MONTH = '{latest_ym}'
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
+        WHERE CITY_CODE = '{city_code}'
+          AND STANDARD_YEAR_MONTH = '{latest_ym}'
     """)
     # DB stores value in units of 1,000 KRW; divide by 10 to display in units of 10,000 KRW (만원)
-    gu_avg_median_income_val = (gu_avg_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10
+    gu_avg_median_income_val = float(gu_avg_income["AVG_MEDIAN_INCOME"].iloc[0] or 0) / 10
 
     # 구 평균 대비 delta 계산
-    sales_diff = dong_total_sales - gu_avg_sales
+    sales_diff = dong_cat_sales - gu_avg_cat_sales
     ratio_diff = cat_ratio - gu_avg_cat_ratio
     pop_diff = dong_total_pop - gu_avg_pop_val
     income_diff = dong_avg_median_income - gu_avg_median_income_val
@@ -413,7 +374,7 @@ with tab1:
     with c1:
         st.metric(
             label="총매출",
-            value=f"{format_amount(dong_total_sales)}원",
+            value=f"{format_amount(dong_cat_sales)}원",
             delta=f"{'+' if sales_diff >= 0 else ''}{format_amount(sales_diff)}원 vs 구 평균"
         )
     with c2:
@@ -481,7 +442,7 @@ with tab2:
     col_start, col_end = st.columns(2)
     all_ym = session.query(f"""
         SELECT DISTINCT STANDARD_YEAR_MONTH
-        FROM CONSUMPTION_ASSET.GRANDATA.CARD_SALES_INFO
+        FROM HACKATHON.DATA.UNIFIED_DISTRICT_MONTHLY
         WHERE DISTRICT_CODE = '{district_code}'
         ORDER BY STANDARD_YEAR_MONTH
     """)["STANDARD_YEAR_MONTH"].tolist()
@@ -516,8 +477,8 @@ with tab2:
         m1.metric("총 매출", f"{format_amount(card_df['SALES'].sum())}원")
         m2.metric("업종 비중", f"{card_df['SALES'].sum() / card_df['TOTAL_SALES'].sum() * 100:.2f}%")
 
-        card_df["SALES_BILLION"] = card_df["SALES"] / 1_0000_0000
-        gu_card_df["GU_AVG_BILLION"] = gu_card_df["GU_AVG_SALES"] / 1_0000_0000
+        card_df["SALES_BILLION"] = card_df["SALES"].astype(float) / 1_0000_0000
+        gu_card_df["GU_AVG_BILLION"] = gu_card_df["GU_AVG_SALES"].astype(float) / 1_0000_0000
 
         show_gu_avg = st.checkbox("구 평균 비교", value=True, key="show_gu_avg")
 
@@ -727,15 +688,13 @@ with tab4:
     if income_df.empty:
         st.info("해당 조건에 맞는 소득·자산 데이터가 없습니다.")
     else:
-        income_df["AVG_INCOME_MANWON"] = income_df["AVG_INCOME"] / 10
         income_df["MEDIAN_INCOME_MANWON"] = income_df["MEDIAN_INCOME"] / 10
         income_df["AVG_ASSET_MANWON"] = income_df["AVG_ASSET"] / 10
 
-        im1, im2, im3, im4 = st.columns(4)
-        im1.metric("평균소득(만원)", f"{income_df['AVG_INCOME_MANWON'].mean():,.0f}")
-        im2.metric("중위소득(만원)", f"{income_df['MEDIAN_INCOME_MANWON'].mean():,.0f}")
-        im3.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
-        im4.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
+        im1, im2, im3 = st.columns(3)
+        im1.metric("중위소득(만원)", f"{income_df['MEDIAN_INCOME_MANWON'].mean():,.0f}")
+        im2.metric("평균자산(만원)", f"{income_df['AVG_ASSET_MANWON'].mean():,.0f}")
+        im3.metric("평균신용점수", f"{income_df['AVG_CREDIT_SCORE'].mean():,.0f}")
 
         dist_df = income_df[[
             "RATE_UNDER_20M", "RATE_20M_30M", "RATE_30M_40M", "RATE_40M_50M",
